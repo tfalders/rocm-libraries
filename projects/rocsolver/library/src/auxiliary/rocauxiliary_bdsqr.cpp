@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -59,9 +59,9 @@ rocblas_status rocsolver_bdsqr_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftV = 0;
-    rocblas_int shiftU = 0;
-    rocblas_int shiftC = 0;
+    rocblas_stride shiftV = 0;
+    rocblas_stride shiftU = 0;
+    rocblas_stride shiftC = 0;
 
     // normal (non-batched non-strided) execution
     rocblas_stride strideD = 0;
@@ -72,30 +72,23 @@ rocblas_status rocsolver_bdsqr_impl(rocblas_handle handle,
     rocblas_int batch_count = 1;
 
     // memory workspace sizes:
-    // size of re-usable workspace
-    size_t size_splits_map, size_work, size_completed;
-    rocsolver_bdsqr_getMemorySize<S>(n, nv, nu, nc, batch_count, &size_splits_map, &size_work,
-                                     &size_completed);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_bdsqr_getMemorySize<T, S>(n, nv, nu, nc, batch_count, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(handle, size_splits_map, size_work,
-                                                      size_completed);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *splits_map, *work, *completed;
-    rocblas_device_malloc mem(handle, size_splits_map, size_work, size_completed);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
     if(!mem)
         return rocblas_status_memory_error;
 
-    splits_map = mem[0];
-    work = mem[1];
-    completed = mem[2];
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
     return rocsolver_bdsqr_template<T>(handle, uplo, n, nv, nu, nc, D, strideD, E, strideE, V,
                                        shiftV, ldv, strideV, U, shiftU, ldu, strideU, C, shiftC,
-                                       ldc, strideC, info, batch_count, (rocblas_int*)splits_map,
-                                       (S*)work, (rocblas_int*)completed);
+                                       ldc, strideC, info, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE

@@ -35,6 +35,7 @@
 #include "lapack_device_functions.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 #include <cmath>
 
@@ -1145,6 +1146,35 @@ void rocsolver_bdsqr_getMemorySize(const rocblas_int n,
     *size_completed = sizeof(rocblas_int) * (batch_count + 2);
 }
 
+template <typename T, typename S>
+void rocsolver_bdsqr_getMemorySize(const rocblas_int n,
+                                   const rocblas_int nv,
+                                   const rocblas_int nu,
+                                   const rocblas_int nc,
+                                   const rocblas_int batch_count,
+                                   rocsolver_workspace_helper* work_helper)
+{
+    // if quick return, no workspace is needed
+    if(n == 0 || batch_count == 0)
+        return;
+
+    // size of split indices array
+    size_t size_splits_map = sizeof(rocblas_int) * (2 * n) * batch_count;
+
+    // size of workspace
+    rocblas_int incW = 0;
+    if(nv)
+        incW += 2;
+    if(nu || nc)
+        incW += 2;
+    size_t size_work = sizeof(S) * (4 + incW * n) * batch_count;
+
+    // size of temporary workspace to indicate problem completion
+    size_t size_completed = sizeof(rocblas_int) * (batch_count + 2);
+
+    work_helper->assign_sizes({size_splits_map, size_work, size_completed});
+}
+
 template <typename S, typename W>
 rocblas_status rocsolver_bdsqr_argCheck(rocblas_handle handle,
                                         const rocblas_fill uplo,
@@ -1225,6 +1255,182 @@ rocblas_status rocsolver_bdsqr_template(rocblas_handle handle,
 
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
+
+    rocsolver_alg_mode alg_mode;
+    ROCBLAS_CHECK(rocsolver_get_alg_mode(handle, rocsolver_function_bdsqr, &alg_mode));
+
+    // set tolerance and max number of iterations:
+    // machine precision (considering rounding strategy)
+    S eps = get_epsilon<S>() / 2;
+    // safest minimum value such that 1/sfm does not overflow
+    S sfm = get_safemin<S>();
+    // max number of iterations (QR steps) before declaring not convergence
+    rocblas_int maxiter = 6 * n * n;
+    // relative accuracy tolerance
+    S tol = std::max(S(10.0), std::min(S(100.0), S(pow(eps, -0.125)))) * eps;
+    //(minimum accepted shift to not ruin relative accuracy) / (max singular
+    // value)
+    S minshift = std::max(eps, tol / S(100)) / (n * tol);
+
+    rocblas_int incW = 0;
+    if(nv)
+        incW += 2;
+    if(nu || nc)
+        incW += 2;
+    rocblas_stride strideW = 4 + incW * n;
+
+    // grid dimensions
+    rocblas_int nuc_max = std::max(nu, nc);
+    rocblas_int nvuc_max = std::max(nv, nuc_max);
+    rocblas_int split_groups;
+
+    dim3 gridReset(batch_count / BS1 + 1, 1, 1);
+    dim3 gridBasic(1, batch_count, 1);
+    dim3 threadsReset(BS1, 1, 1);
+    dim3 threadsBasic(1, 1, 1);
+    dim3 threadsBS1(BS1, 1, 1);
+
+    dim3 threadsUC((nuc_max ? std::min(nuc_max, BS1) : 1), 1, 1);
+    dim3 threadsVUC((nvuc_max ? std::min(nvuc_max, BS1) : 1), 1, 1);
+
+    // set completed = 0
+    ROCSOLVER_LAUNCH_KERNEL(reset_info, gridReset, threadsReset, 0, stream, completed,
+                            batch_count + 2, 0);
+
+    // check for NaNs and Infs in input
+    ROCSOLVER_LAUNCH_KERNEL((bdsqr_init<T>), gridBasic, threadsBasic, 0, stream, n, D, strideD, E,
+                            strideE, info, maxiter, sfm, tol, splits_map, work, strideW, completed);
+
+    if(n > 1)
+    {
+        if(alg_mode == rocsolver_alg_mode_hybrid)
+        {
+            ROCBLAS_CHECK(rocsolver_bdsqr_host_batch_template<T, S, W1, W2, W3, rocblas_int>(
+                handle, uplo, n, nv, nu, nc, D, strideD, E, strideE, V, shiftV, ldv, strideV, U,
+                shiftU, ldu, strideU, C, shiftC, ldc, strideC, info, batch_count, splits_map, work));
+        }
+        else
+        {
+            // rotate to upper bidiagonal if necessary
+            if(uplo == rocblas_fill_lower)
+            {
+                ROCSOLVER_LAUNCH_KERNEL((bdsqr_lower2upper<T>), gridBasic, threadsUC, 0, stream, n,
+                                        nu, nc, D, strideD, E, strideE, U, shiftU, ldu, strideU, C,
+                                        shiftC, ldc, strideC, info, work, strideW, completed);
+            }
+
+            rocblas_int h_iter = 0;
+            struct
+            {
+                rocblas_int completed;
+                rocblas_int num_splits;
+            } h_params;
+
+            while(h_iter < maxiter)
+            {
+                // if all instances in the batch have finished, exit the loop
+                HIP_CHECK(hipMemcpyAsync(&h_params, completed, sizeof(h_params),
+                                         hipMemcpyDeviceToHost, stream));
+                HIP_CHECK(hipStreamSynchronize(stream));
+
+                if(h_params.completed == batch_count)
+                    break;
+
+                dim3 gridSplits(1, h_params.num_splits, batch_count);
+                dim3 gridVUC((nvuc_max - 1) / BS1 + 1, h_params.num_splits, batch_count);
+
+                for(rocblas_int inner_iters = 0; inner_iters < BDSQR_ITERS_PER_SYNC; inner_iters++)
+                {
+                    if(nvuc_max <= BDSQR_SWITCH_SIZE)
+                    {
+                        // main computation of SVD
+                        ROCSOLVER_LAUNCH_KERNEL((bdsqr_compute<BS1, T>), gridSplits, threadsBS1, 0,
+                                                stream, n, nv, nu, nc, D, strideD, E, strideE, V,
+                                                shiftV, ldv, strideV, U, shiftU, ldu, strideU, C,
+                                                shiftC, ldc, strideC, maxiter, eps, sfm, tol,
+                                                minshift, splits_map, work, incW, strideW, completed);
+                    }
+                    else
+                    {
+                        // main computation of SVD
+                        ROCSOLVER_LAUNCH_KERNEL((bdsqr_compute<BS1, T>), gridSplits, threadsBS1, 0,
+                                                stream, n, nv, nu, nc, D, strideD, E, strideE,
+                                                (W1) nullptr, shiftV, ldv, strideV, (W2) nullptr,
+                                                shiftU, ldu, strideU, (W3) nullptr, shiftC, ldc,
+                                                strideC, maxiter, eps, sfm, tol, minshift,
+                                                splits_map, work, incW, strideW, completed);
+
+                        // update singular vectors
+                        ROCSOLVER_LAUNCH_KERNEL((bdsqr_rotate<T>), gridVUC, threadsVUC, 0, stream,
+                                                n, nv, nu, nc, V, shiftV, ldv, strideV, U, shiftU,
+                                                ldu, strideU, C, shiftC, ldc, strideC, maxiter,
+                                                splits_map, work, incW, strideW, completed);
+                    }
+
+                    // update split block endpoints
+                    ROCSOLVER_LAUNCH_KERNEL((bdsqr_update_endpoints<T>), gridSplits, threadsBasic,
+                                            0, stream, n, E, strideE, splits_map, work, strideW,
+                                            completed);
+                }
+
+                // check for completion
+                h_iter += BDSQR_ITERS_PER_SYNC;
+                ROCSOLVER_LAUNCH_KERNEL((bdsqr_chk_completed<T>), gridBasic, threadsBasic, 0,
+                                        stream, n, maxiter, splits_map, work, strideW, completed);
+            }
+        }
+    }
+
+    // sort the singular values and vectors
+    ROCSOLVER_LAUNCH_KERNEL((bdsqr_finalize<T>), gridBasic, threadsVUC, 0, stream, n, nv, nu, nc, D,
+                            strideD, E, strideE, V, shiftV, ldv, strideV, U, shiftU, ldu, strideU,
+                            C, shiftC, ldc, strideC, info, splits_map, completed);
+
+    return rocblas_status_success;
+}
+
+template <typename T, typename S, typename W1, typename W2, typename W3>
+rocblas_status rocsolver_bdsqr_template(rocblas_handle handle,
+                                        const rocblas_fill uplo,
+                                        const rocblas_int n,
+                                        const rocblas_int nv,
+                                        const rocblas_int nu,
+                                        const rocblas_int nc,
+                                        S* D,
+                                        const rocblas_stride strideD,
+                                        S* E,
+                                        const rocblas_stride strideE,
+                                        W1 V,
+                                        const rocblas_stride shiftV,
+                                        const rocblas_int ldv,
+                                        const rocblas_stride strideV,
+                                        W2 U,
+                                        const rocblas_stride shiftU,
+                                        const rocblas_int ldu,
+                                        const rocblas_stride strideU,
+                                        W3 C,
+                                        const rocblas_stride shiftC,
+                                        const rocblas_int ldc,
+                                        const rocblas_stride strideC,
+                                        rocblas_int* info,
+                                        const rocblas_int batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("bdsqr", "uplo:", uplo, "n:", n, "nv:", nv, "nu:", nu, "nc:", nc,
+                    "shiftV:", shiftV, "ldv:", ldv, "shiftU:", shiftU, "ldu:", ldu,
+                    "shiftC:", shiftC, "ldc:", ldc, "bc:", batch_count);
+
+    // quick return
+    if(n == 0 || batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // prepare workspace
+    rocblas_int* splits_map = (rocblas_int*)(*work_helper)[0];
+    S* work = (S*)(*work_helper)[1];
+    rocblas_int* completed = (rocblas_int*)(*work_helper)[2];
 
     rocsolver_alg_mode alg_mode;
     ROCBLAS_CHECK(rocsolver_get_alg_mode(handle, rocsolver_function_bdsqr, &alg_mode));
