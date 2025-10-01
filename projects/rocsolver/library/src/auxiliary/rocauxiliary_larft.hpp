@@ -40,6 +40,7 @@
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
 #include "rocsolver_run_specialized_kernels.hpp"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -833,6 +834,39 @@ void rocsolver_larft_inverse_getMemorySize(const rocblas_int n,
         *size_workArr = 0;
 }
 
+template <bool BATCHED, typename T>
+void rocsolver_larft_getMemorySize(const rocblas_int n,
+                                   const rocblas_int k,
+                                   const rocblas_int batch_count,
+                                   rocsolver_workspace_helper* work_helper,
+                                   bool use_inverse = false)
+{
+    // if quick return, no workspace is needed
+    if(n == 0 || batch_count == 0)
+        return;
+
+    // size of array of pointers to workspace
+    size_t size_workArr = 0;
+    if(BATCHED)
+        size_workArr = sizeof(T*) * batch_count;
+
+    if(use_inverse)
+    {
+        // size of re-usable workspace
+        size_t size_work = sizeof(T) * k * k * batch_count;
+
+        work_helper->assign_sizes({size_work, size_workArr});
+    }
+    else
+    {
+        // size of re-usable workspace
+        size_t size_work = sizeof(T) * k * batch_count;
+
+        work_helper->add_scalars<T>();
+        work_helper->assign_sizes({size_work, size_workArr});
+    }
+}
+
 template <typename T, typename U, bool COMPLEX = rocblas_is_complex<T>>
 rocblas_status rocsolver_larft_inverse_template(rocblas_handle handle,
                                                 const rocblas_direct direct,
@@ -911,6 +945,277 @@ rocblas_status rocsolver_larft_inverse_template(rocblas_handle handle,
     // restore original V
     ROCSOLVER_LAUNCH_KERNEL((larft_restore_tri), gridTri, blockTri, 0, stream, tri_uplo, k, V,
                             shiftV + tri_offset, ldv, strideV, work);
+
+    rocblas_set_pointer_mode(handle, old_mode);
+    return rocblas_status_success;
+}
+
+template <typename T, typename U, bool COMPLEX = rocblas_is_complex<T>>
+rocblas_status rocsolver_larft_template(rocblas_handle handle,
+                                        const rocblas_direct direct,
+                                        const rocblas_storev storev,
+                                        const rocblas_int n,
+                                        const rocblas_int k,
+                                        U V,
+                                        const rocblas_stride shiftV,
+                                        const rocblas_int ldv,
+                                        const rocblas_stride strideV,
+                                        T* tau,
+                                        const rocblas_stride strideT,
+                                        T* F,
+                                        const rocblas_int ldf,
+                                        const rocblas_stride strideF,
+                                        const rocblas_int batch_count,
+                                        rocsolver_workspace_helper* work_helper,
+                                        bool use_inverse = false)
+{
+    ROCSOLVER_ENTER("larft", "direct:", direct, "storev:", storev, "n:", n, "k:", k,
+                    "shiftV:", shiftV, "ldv:", ldv, "ldf:", ldf, "bc:", batch_count);
+
+    // quick return
+    if(n == 0 || batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // save old pointer mode
+    rocblas_pointer_mode old_mode;
+    rocblas_get_pointer_mode(handle, &old_mode);
+
+    // prepare workspace
+    T* work = (T*)(*work_helper)[0];
+    T** workArr = (T**)(*work_helper)[1];
+
+    rocblas_stride stridew = rocblas_stride(k);
+    rocblas_diagonal diag = rocblas_diagonal_non_unit;
+    rocblas_fill uplo;
+    rocblas_operation trans;
+
+    const bool use_gemm = n > k;
+    const T zero = T(0);
+    const T one = T(1);
+
+    if(use_inverse)
+    {
+        rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host);
+        const bool colwise = (storev == rocblas_column_wise);
+        const bool forward = (direct == rocblas_forward_direction);
+
+        rocblas_operation transA
+            = colwise ? rocblas_operation_conjugate_transpose : rocblas_operation_none;
+        rocblas_operation transB
+            = colwise ? rocblas_operation_none : rocblas_operation_conjugate_transpose;
+
+        rocblas_int tri_offset;
+        rocblas_fill tri_uplo;
+
+        if(colwise)
+        {
+            tri_uplo = forward ? rocblas_fill_upper : rocblas_fill_lower;
+            tri_offset = (!forward && n > k) ? idx2D(n - k, 0, ldv) : 0;
+        }
+        else
+        {
+            tri_uplo = forward ? rocblas_fill_lower : rocblas_fill_upper;
+            tri_offset = (!forward && n > k) ? idx2D(0, n - k, ldv) : 0;
+        }
+
+        rocblas_int blocks = (k - 1) / 32 + 1;
+        dim3 gridTri(blocks, blocks, batch_count);
+        dim3 blockTri(32, 32);
+
+        // set V to unit triangular/trapezoidal
+        ROCSOLVER_LAUNCH_KERNEL((larft_set_tri), gridTri, blockTri, 0, stream, tri_uplo, k, V,
+                                shiftV + tri_offset, ldv, strideV, work);
+
+        // compute: V' * V or V * V'
+        rocsolver_gemm(handle, transA, transB, k, k, n, &one, V, shiftV, ldv, strideV, V, shiftV,
+                       ldv, strideV, &zero, F, 0, ldf, strideF, batch_count, workArr);
+
+        // set F diag to 1 / tau
+        ROCSOLVER_LAUNCH_KERNEL(larft_set_diag, dim3(blocks, 1, batch_count), dim3(32, 1), 0,
+                                stream, k, tau, strideT, F, ldf, strideF);
+
+        // restore original V
+        ROCSOLVER_LAUNCH_KERNEL((larft_restore_tri), gridTri, blockTri, 0, stream, tri_uplo, k, V,
+                                shiftV + tri_offset, ldv, strideV, work);
+    }
+    else
+    {
+        T* scalars = work_helper->get_scalars<T>();
+        const rocblas_int u1_n = use_gemm ? k : n;
+        const rocblas_int u2_n = use_gemm ? n - k : 0;
+
+        // Compute T=V2'*V2 or V2*V2' (V'=[V1' V2'] where V1 is triangular and V is trapezoidal)
+        // SYRK/HERK can be used alternatively, but GEMM is currently more performant.
+        if(use_gemm)
+        {
+            rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host);
+            if(direct == rocblas_forward_direction && storev == rocblas_column_wise)
+            {
+                rocsolver_gemm(handle, rocblas_operation_conjugate_transpose, rocblas_operation_none,
+                               k, k, u2_n, &one, V, shiftV + idx2D(u1_n, 0, ldv), ldv, strideV, V,
+                               shiftV + idx2D(u1_n, 0, ldv), ldv, strideV, &zero, F, 0, ldf,
+                               strideF, batch_count, workArr);
+            }
+            else if(direct == rocblas_backward_direction && storev == rocblas_column_wise)
+            {
+                rocsolver_gemm(handle, rocblas_operation_conjugate_transpose, rocblas_operation_none,
+                               k, k, u2_n, &one, V, shiftV, ldv, strideV, V, shiftV, ldv, strideV,
+                               &zero, F, 0, ldf, strideF, batch_count, workArr);
+            }
+            else if(direct == rocblas_forward_direction && storev == rocblas_row_wise)
+            {
+                rocsolver_gemm(handle, rocblas_operation_none, rocblas_operation_conjugate_transpose,
+                               k, k, u2_n, &one, V, shiftV + idx2D(0, u1_n, ldv), ldv, strideV, V,
+                               shiftV + idx2D(0, u1_n, ldv), ldv, strideV, &zero, F, 0, ldf,
+                               strideF, batch_count, workArr);
+            }
+            else if(direct == rocblas_backward_direction && storev == rocblas_row_wise)
+            {
+                rocsolver_gemm(handle, rocblas_operation_none, rocblas_operation_conjugate_transpose,
+                               k, k, u2_n, &one, V, shiftV, ldv, strideV, V, shiftV, ldv, strideV,
+                               &zero, F, 0, ldf, strideF, batch_count, workArr);
+            }
+        }
+
+        // Fix diagonal of T, make zero the not used triangular part,
+        // setup tau (changing signs) and account for the non-stored 1's on the
+        // householder vectors
+        rocblas_int blocks = (k - 1) / 32 + 1;
+        ROCSOLVER_LAUNCH_KERNEL(set_triangular, dim3(blocks, blocks, batch_count), dim3(32, 32), 0,
+                                stream, n, k, V, shiftV, ldv, strideV, tau, strideT, F, ldf,
+                                strideF, direct, storev, use_gemm);
+        ROCSOLVER_LAUNCH_KERNEL(set_tau, dim3(blocks, batch_count), dim3(32, 1), 0, stream, k, tau,
+                                strideT);
+
+        int device;
+        HIP_CHECK(hipGetDevice(&device));
+        hipDeviceProp_t props;
+        HIP_CHECK(hipGetDeviceProperties(&props, device));
+        size_t lmemsize = sizeof(T) * (k + 1) * k;
+
+        rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device);
+
+        if(direct == rocblas_forward_direction)
+        {
+            uplo = rocblas_fill_upper;
+
+            // **** FOR NOW, IT DOES NOT LOOK FOR TRAILING ZEROS
+            //      AS THIS WOULD REQUIRE SYNCHRONIZATION WITH GPU.
+            //      IT WILL WORK ON THE ENTIRE MATRIX/VECTOR REGARDLESS OF
+            //      ZERO ENTRIES ****
+
+            if(k <= LARFT_SWITCHSIZE && lmemsize <= props.sharedMemPerBlock)
+            {
+                ROCSOLVER_LAUNCH_KERNEL(larft_kernel_forward, dim3(1, batch_count), dim3(BS1, 1),
+                                        lmemsize, stream, storev, u1_n, k, V, shiftV, ldv, strideV,
+                                        tau, strideT, F, ldf, strideF);
+            }
+            else
+            {
+                for(rocblas_int i = 1; i < k; ++i)
+                {
+                    // compute the matrix vector product, using the householder vectors
+                    if(storev == rocblas_column_wise)
+                    {
+                        trans = rocblas_operation_conjugate_transpose;
+                        rocblasCall_gemv<T>(handle, trans, u1_n - 1 - i, i, tau + i, strideT, V,
+                                            shiftV + idx2D(i + 1, 0, ldv), ldv, strideV, V,
+                                            shiftV + idx2D(i + 1, i, ldv), 1, strideV, scalars + 2,
+                                            0, F, idx2D(0, i, ldf), 1, strideF, batch_count, workArr);
+                    }
+                    else
+                    {
+                        if(COMPLEX)
+                            rocsolver_lacgv_template<T>(handle, n - i - 1, V,
+                                                        shiftV + idx2D(i, i + 1, ldv), ldv, strideV,
+                                                        batch_count);
+
+                        trans = rocblas_operation_none;
+                        rocblasCall_gemv<T>(handle, trans, i, u1_n - 1 - i, tau + i, strideT, V,
+                                            shiftV + idx2D(0, i + 1, ldv), ldv, strideV, V,
+                                            shiftV + idx2D(i, i + 1, ldv), ldv, strideV, scalars + 2,
+                                            0, F, idx2D(0, i, ldf), 1, strideF, batch_count, workArr);
+
+                        if(COMPLEX)
+                            rocsolver_lacgv_template<T>(handle, n - i - 1, V,
+                                                        shiftV + idx2D(i, i + 1, ldv), ldv, strideV,
+                                                        batch_count);
+                    }
+
+                    // multiply by the previous triangular factor
+                    trans = rocblas_operation_none;
+                    rocblasCall_trmv<T>(handle, uplo, trans, diag, i, F, 0, ldf, strideF, F,
+                                        idx2D(0, i, ldf), 1, strideF, work, stridew, batch_count);
+                }
+            }
+        }
+        else
+        {
+            uplo = rocblas_fill_lower;
+
+            // **** FOR NOW, IT DOES NOT LOOK FOR TRAILING ZEROS
+            //      AS THIS WOULD REQUIRE SYNCHRONIZATION WITH GPU.
+            //      IT WILL WORK ON THE ENTIRE MATRIX/VECTOR REGARDLESS OF
+            //      ZERO ENTRIES ****
+
+            if(k <= LARFT_SWITCHSIZE && lmemsize <= props.sharedMemPerBlock)
+            {
+                auto shiftU2 = shiftV
+                    + ((storev == rocblas_column_wise) ? idx2D(u2_n, 0, ldv) : idx2D(0, u2_n, ldv));
+                ROCSOLVER_LAUNCH_KERNEL(larft_kernel_backward, dim3(1, batch_count), dim3(BS1, 1),
+                                        lmemsize, stream, storev, u1_n, k, V, shiftU2, ldv, strideV,
+                                        tau, strideT, F, ldf, strideF);
+            }
+            else
+            {
+                for(rocblas_int i = k - 2; i >= 0; --i)
+                {
+                    // compute the matrix vector product, using the householder vectors
+                    if(storev == rocblas_column_wise)
+                    {
+                        trans = rocblas_operation_conjugate_transpose;
+                        rocblasCall_gemv<T>(handle, trans, u1_n - k + i, k - i - 1, tau + i,
+                                            strideT, V, shiftV + idx2D(u2_n, i + 1, ldv), ldv,
+                                            strideV, V, shiftV + idx2D(u2_n, i, ldv), 1, strideV,
+                                            scalars + 2, 0, F, idx2D(i + 1, i, ldf), 1, strideF,
+                                            batch_count, workArr);
+                    }
+                    else
+                    {
+                        if(COMPLEX)
+                            rocsolver_lacgv_template<T>(handle, n - k + i, V,
+                                                        shiftV + idx2D(i, 0, ldv), ldv, strideV,
+                                                        batch_count);
+
+                        trans = rocblas_operation_none;
+                        rocblasCall_gemv<T>(handle, trans, k - i - 1, u1_n - k + i, tau + i,
+                                            strideT, V, shiftV + idx2D(i + 1, u2_n, ldv), ldv,
+                                            strideV, V, shiftV + idx2D(i, u2_n, ldv), ldv, strideV,
+                                            scalars + 2, 0, F, idx2D(i + 1, i, ldf), 1, strideF,
+                                            batch_count, workArr);
+
+                        if(COMPLEX)
+                            rocsolver_lacgv_template<T>(handle, n - k + i, V,
+                                                        shiftV + idx2D(i, 0, ldv), ldv, strideV,
+                                                        batch_count);
+                    }
+
+                    // multiply by the previous triangular factor
+                    trans = rocblas_operation_none;
+                    rocblasCall_trmv<T>(handle, uplo, trans, diag, k - i - 1, F,
+                                        idx2D(i + 1, i + 1, ldf), ldf, strideF, F,
+                                        idx2D(i + 1, i, ldf), 1, strideF, work, stridew, batch_count);
+                }
+            }
+        }
+
+        // restore tau
+        ROCSOLVER_LAUNCH_KERNEL(set_tau, dim3(blocks, batch_count), dim3(32, 1), 0, stream, k, tau,
+                                strideT);
+    }
 
     rocblas_set_pointer_mode(handle, old_mode);
     return rocblas_status_success;
