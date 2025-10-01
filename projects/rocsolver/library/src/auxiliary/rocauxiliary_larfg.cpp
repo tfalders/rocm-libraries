@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -54,27 +54,22 @@ rocblas_status
     I batch_count = 1;
 
     // memory workspace sizes:
-    // size of re-usable workspace
-    size_t size_work;
-    // size to store the norms
-    size_t size_norms;
-    ROCBLAS_CHECK(rocsolver_larfg_getMemorySize<T>(n, batch_count, &size_work, &size_norms));
+    rocsolver_workspace_helper work_helper;
+    ROCBLAS_CHECK(rocsolver_larfg_getMemorySize<T>(n, batch_count, &work_helper));
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(handle, size_work, size_norms);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *work, *norms;
-    rocblas_device_malloc mem(handle, size_work, size_norms);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
     if(!mem)
         return rocblas_status_memory_error;
 
-    work = mem[0];
-    norms = mem[1];
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
     return rocsolver_larfg_template<T>(handle, n, alpha, shifta, x, shiftx, incx, stridex, tau,
-                                       strideP, batch_count, (T*)work, (T*)norms);
+                                       strideP, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE

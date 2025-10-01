@@ -35,6 +35,7 @@
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
 #include "rocsolver_run_specialized_kernels.hpp"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -194,6 +195,40 @@ rocblas_status rocsolver_larfg_getMemorySize(const I n,
     return rocblas_status_success;
 }
 
+template <typename T, typename I>
+rocblas_status rocsolver_larfg_getMemorySize(const I n,
+                                             const I batch_count,
+                                             rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(n == 0 || batch_count == 0)
+        return rocblas_status_success;
+
+    // if small size no workspace needed
+    if(n <= LARFG_SSKER_MAX_N)
+    {
+        // TODO: Some architectures have failures in sygvx with small-size kernels enabled, more investigation needed
+        int device;
+        HIP_CHECK(hipGetDevice(&device));
+        hipDeviceProp_t deviceProperties;
+        HIP_CHECK(hipGetDeviceProperties(&deviceProperties, device));
+        if(deviceProperties.warpSize >= 64)
+            return rocblas_status_success;
+    }
+
+    // size of space to store norms
+    size_t size_norms = sizeof(T) * batch_count;
+
+    // size of re-usable workspace
+    // TODO: replace with rocBLAS call
+    constexpr I ROCBLAS_DOT_NB = 512;
+    size_t size_work = n > 2 ? (n - 2) / ROCBLAS_DOT_NB + 2 : 1;
+    size_work *= sizeof(T) * batch_count;
+
+    work_helper->assign_sizes({size_norms, size_work});
+    return rocblas_status_success;
+}
+
 template <typename T, typename I, typename U>
 rocblas_status
     rocsolver_larfg_argCheck(rocblas_handle handle, const I n, const I incx, T alpha, T x, U tau)
@@ -314,6 +349,106 @@ rocblas_status rocsolver_larfg_template(rocblas_handle handle,
     using S = decltype(std::real(T{}));
     return rocsolver_larfg_template<T, I, S>(handle, n, alpha, shifta, (S*)nullptr, 0, 0, x, shiftx,
                                              incx, stridex, tau, strideP, batch_count, work, norms);
+}
+
+template <typename T, typename I, typename S, typename U, bool COMPLEX = rocblas_is_complex<T>>
+rocblas_status rocsolver_larfg_template(rocblas_handle handle,
+                                        const I n,
+                                        U alpha,
+                                        const rocblas_stride shifta,
+                                        S* beta,
+                                        const rocblas_stride shiftb,
+                                        const rocblas_stride strideb,
+                                        U x,
+                                        const rocblas_stride shiftx,
+                                        const I incx,
+                                        const rocblas_stride stridex,
+                                        T* tau,
+                                        const rocblas_stride strideP,
+                                        const I batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    // TODO: How to get alpha for trace logging
+    ROCSOLVER_ENTER("larfg", "n:", n, "shiftA:", shifta, "shiftX:", shiftx, "incx:", incx,
+                    "bc:", batch_count);
+
+    // quick return
+    if(n == 0 || batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // if n==1 return tau=0
+    dim3 gridReset(1, batch_count, 1);
+    dim3 setDiag(batch_count, 1, 1);
+    dim3 threads(1, 1, 1);
+    if(n == 1 && !COMPLEX)
+    {
+        ROCSOLVER_LAUNCH_KERNEL(reset_batch_info<T>, gridReset, threads, 0, stream, tau, strideP, 1,
+                                0);
+        if(beta != nullptr)
+        {
+            ROCSOLVER_LAUNCH_KERNEL((set_diag<T>), setDiag, threads, 0, stream, beta, shiftb,
+                                    strideb, alpha, shifta, n, stridex, (I)1, true);
+        }
+        return rocblas_status_success;
+    }
+
+    // if n is small, use small-size kernel
+    if(true)
+    {
+        // TODO: Some architectures have failures in sygvx with small-size kernels enabled, more investigation needed
+        const hipDeviceProp_t* props = rocblas_internal_get_device_prop(handle);
+        if(props->warpSize >= 64)
+        {
+            return larfg_run_small(handle, n, alpha, shifta, stridex, beta, shiftb, strideb, x,
+                                   shiftx, incx, stridex, tau, strideP, batch_count);
+        }
+    }
+
+    // everything must be executed with scalars on the device
+    rocblas_pointer_mode old_mode;
+    rocblas_get_pointer_mode(handle, &old_mode);
+    rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device);
+
+    // prepare workspace
+    T* norms = (T*)(*work_helper)[0];
+    T* work = (T*)(*work_helper)[1];
+
+    // compute squared norm of x
+    rocblasCall_dot<COMPLEX, T>(handle, n - 1, x, shiftx, incx, stridex, x, shiftx, incx, stridex,
+                                batch_count, norms, work);
+
+    // set value of tau and beta and scalling factor for vector x
+    // alpha <- beta, norms <- scaling
+    ROCSOLVER_LAUNCH_KERNEL((set_taubeta<T, I>), dim3(batch_count), dim3(1), 0, stream, tau,
+                            strideP, norms, alpha, shifta, stridex, beta, shiftb, strideb);
+
+    // compute vector v=x*norms
+    rocblasCall_scal<T>(handle, n - 1, norms, 1, x, shiftx, incx, stridex, batch_count);
+
+    rocblas_set_pointer_mode(handle, old_mode);
+    return rocblas_status_success;
+}
+
+template <typename T, typename I, typename U, bool COMPLEX = rocblas_is_complex<T>>
+rocblas_status rocsolver_larfg_template(rocblas_handle handle,
+                                        const I n,
+                                        U alpha,
+                                        const rocblas_stride shifta,
+                                        U x,
+                                        const rocblas_stride shiftx,
+                                        const I incx,
+                                        const rocblas_stride stridex,
+                                        T* tau,
+                                        const rocblas_stride strideP,
+                                        const I batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    using S = decltype(std::real(T{}));
+    return rocsolver_larfg_template<T, I, S>(handle, n, alpha, shifta, (S*)nullptr, 0, 0, x, shiftx,
+                                             incx, stridex, tau, strideP, batch_count, work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE
