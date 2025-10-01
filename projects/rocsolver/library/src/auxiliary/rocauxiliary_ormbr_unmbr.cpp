@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -57,48 +57,34 @@ rocblas_status rocsolver_ormbr_unmbr_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftA = 0;
-    rocblas_int shiftC = 0;
+    rocblas_stride shiftA = 0;
+    rocblas_stride shiftC = 0;
 
     // normal (non-batched non-strided) execution
-    rocblas_int strideA = 0;
-    rocblas_int strideP = 0;
-    rocblas_int strideC = 0;
+    rocblas_stride strideA = 0;
+    rocblas_stride strideP = 0;
+    rocblas_stride strideC = 0;
     rocblas_int batch_count = 1;
 
     // memory workspace sizes:
-    // requirements for calling ORMQR/UNMQR or ORMLQ/UNMLQ
-    size_t size_scalars;
-    size_t size_AbyxORwork, size_diagORtmptr;
-    size_t size_trfact;
-    size_t size_workArr;
-    rocsolver_ormbr_unmbr_getMemorySize<false, T>(storev, side, m, n, k, batch_count, &size_scalars,
-                                                  &size_AbyxORwork, &size_diagORtmptr, &size_trfact,
-                                                  &size_workArr);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_ormbr_unmbr_getMemorySize<false, T>(storev, side, trans, m, n, k, batch_count,
+                                                  &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(handle, size_scalars, size_AbyxORwork,
-                                                      size_diagORtmptr, size_trfact, size_workArr);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *scalars, *AbyxORwork, *diagORtmptr, *trfact, *workArr;
-    rocblas_device_malloc mem(handle, size_scalars, size_AbyxORwork, size_diagORtmptr, size_trfact,
-                              size_workArr);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
     if(!mem)
         return rocblas_status_memory_error;
 
-    scalars = mem[0];
-    AbyxORwork = mem[1];
-    diagORtmptr = mem[2];
-    trfact = mem[3];
-    workArr = mem[4];
-    if(size_scalars > 0)
-        init_scalars(handle, (T*)scalars);
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
-    return rocsolver_ormbr_unmbr_template<false, false, T>(
-        handle, storev, side, trans, m, n, k, A, shiftA, lda, strideA, ipiv, strideP, C, shiftC, ldc,
-        strideC, batch_count, (T*)scalars, (T*)AbyxORwork, (T*)diagORtmptr, (T*)trfact, (T**)workArr);
+    return rocsolver_ormbr_unmbr_template<false, T>(handle, storev, side, trans, m, n, k, A, shiftA,
+                                                    lda, strideA, ipiv, strideP, C, shiftC, ldc,
+                                                    strideC, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE

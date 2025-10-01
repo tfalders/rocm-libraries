@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,6 +36,7 @@
 #include "rocauxiliary_ormqr_unmqr.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -75,6 +76,32 @@ void rocsolver_ormbr_unmbr_getMemorySize(const rocblas_storev storev,
         rocsolver_ormlq_unmlq_getMemorySize<BATCHED, T>(side, m, n, std::min(nq, k), batch_count,
                                                         size_scalars, size_AbyxORwork,
                                                         size_diagORtmptr, size_trfact, size_workArr);
+}
+
+template <bool BATCHED, typename T>
+void rocsolver_ormbr_unmbr_getMemorySize(const rocblas_storev storev,
+                                         const rocblas_side side,
+                                         const rocblas_operation trans,
+                                         const rocblas_int m,
+                                         const rocblas_int n,
+                                         const rocblas_int k,
+                                         const rocblas_int batch_count,
+                                         rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(m == 0 || n == 0 || k == 0 || batch_count == 0)
+        return;
+
+    rocblas_int nq = side == rocblas_side_left ? m : n;
+
+    // requirements for calling ORMQR/UNMQR or ORMLQ/UNMLQ
+    if(storev == rocblas_column_wise)
+        rocsolver_ormqr_unmqr_getMemorySize<BATCHED, T>(side, trans, m, n, std::min(nq, k),
+                                                        batch_count, work_helper);
+
+    else
+        rocsolver_ormlq_unmlq_getMemorySize<BATCHED, T>(side, trans, m, n, std::min(nq, k),
+                                                        batch_count, work_helper);
 }
 
 template <bool COMPLEX, typename T, typename U>
@@ -224,6 +251,105 @@ rocblas_status rocsolver_ormbr_unmbr_template(rocblas_handle handle,
                 handle, side, transP, rows, cols, nq - 1, A, shiftA + idx2D(0, 1, lda), lda,
                 strideA, ipiv, strideP, C, shiftC + idx2D(rowC, colC, ldc), ldc, strideC,
                 batch_count, scalars, AbyxORwork, diagORtmptr, trfact, workArr);
+        }
+    }
+
+    return rocblas_status_success;
+}
+
+template <bool BATCHED, typename T, typename U, bool COMPLEX = rocblas_is_complex<T>>
+rocblas_status rocsolver_ormbr_unmbr_template(rocblas_handle handle,
+                                              const rocblas_storev storev,
+                                              const rocblas_side side,
+                                              const rocblas_operation trans,
+                                              const rocblas_int m,
+                                              const rocblas_int n,
+                                              const rocblas_int k,
+                                              U A,
+                                              const rocblas_stride shiftA,
+                                              const rocblas_int lda,
+                                              const rocblas_stride strideA,
+                                              T* ipiv,
+                                              const rocblas_stride strideP,
+                                              U C,
+                                              const rocblas_stride shiftC,
+                                              const rocblas_int ldc,
+                                              const rocblas_stride strideC,
+                                              const rocblas_int batch_count,
+                                              rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("ormbr_unmbr", "storev:", storev, "side:", side, "trans:", trans, "m:", m,
+                    "n:", n, "k:", k, "shiftA:", shiftA, "lda:", lda, "shiftC:", shiftC,
+                    "ldc:", ldc, "bc:", batch_count);
+
+    // quick return
+    if(!n || !m || !k || !batch_count)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    rocblas_int nq = side == rocblas_side_left ? m : n;
+    rocblas_int cols, rows, colC, rowC;
+    if(side == rocblas_side_left)
+    {
+        rows = m - 1;
+        cols = n;
+        rowC = 1;
+        colC = 0;
+    }
+    else
+    {
+        rows = m;
+        cols = n - 1;
+        rowC = 0;
+        colC = 1;
+    }
+
+    // if column-wise, apply the orthogonal matrix Q generated in the
+    // bi-diagonalization gebrd to a general matrix C
+    if(storev == rocblas_column_wise)
+    {
+        if(nq >= k)
+        {
+            rocsolver_ormqr_unmqr_template<BATCHED, T>(handle, side, trans, m, n, k, A, shiftA, lda,
+                                                       strideA, ipiv, strideP, C, shiftC, ldc,
+                                                       strideC, batch_count, work_helper);
+        }
+        else
+        {
+            // shift the householder vectors provided by gebrd as they come below the
+            // first subdiagonal
+            rocsolver_ormqr_unmqr_template<BATCHED, T>(handle, side, trans, rows, cols, nq - 1, A,
+                                                       shiftA + idx2D(1, 0, lda), lda, strideA, ipiv,
+                                                       strideP, C, shiftC + idx2D(rowC, colC, ldc),
+                                                       ldc, strideC, batch_count, work_helper);
+        }
+    }
+
+    // if row-wise, apply the orthogonal matrix P generated in the
+    // bi-diagonalization gebrd to a general matrix C
+    else
+    {
+        rocblas_operation transP;
+        if(trans == rocblas_operation_none)
+            transP = (COMPLEX ? rocblas_operation_conjugate_transpose : rocblas_operation_transpose);
+        else
+            transP = rocblas_operation_none;
+        if(nq > k)
+        {
+            rocsolver_ormlq_unmlq_template<BATCHED, T>(handle, side, transP, m, n, k, A, shiftA,
+                                                       lda, strideA, ipiv, strideP, C, shiftC, ldc,
+                                                       strideC, batch_count, work_helper);
+        }
+        else
+        {
+            // shift the householder vectors provided by gebrd as they come above the
+            // first superdiagonal
+            rocsolver_ormlq_unmlq_template<BATCHED, T>(handle, side, transP, rows, cols, nq - 1, A,
+                                                       shiftA + idx2D(0, 1, lda), lda, strideA, ipiv,
+                                                       strideP, C, shiftC + idx2D(rowC, colC, ldc),
+                                                       ldc, strideC, batch_count, work_helper);
         }
     }
 
