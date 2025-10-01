@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -58,9 +58,9 @@ rocblas_status rocsolver_larfb_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftV = 0;
-    rocblas_int shiftA = 0;
-    rocblas_int shiftF = 0;
+    rocblas_stride shiftV = 0;
+    rocblas_stride shiftA = 0;
+    rocblas_stride shiftF = 0;
 
     // normal (non-batched non-strided) execution
     rocblas_stride stridev = 0;
@@ -69,29 +69,23 @@ rocblas_status rocsolver_larfb_impl(rocblas_handle handle,
     rocblas_int batch_count = 1;
 
     // memory workspace sizes:
-    // size of array for temporary computations with
-    // triangular part of V
-    size_t size_tmptr;
-    // size of arrays of pointers (for batched cases)
-    size_t size_workArr;
-    rocsolver_larfb_getMemorySize<false, T>(side, m, n, k, batch_count, &size_tmptr, &size_workArr);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_larfb_getMemorySize<false, T>(side, trans, m, n, k, batch_count, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(handle, size_tmptr, size_workArr);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *tmptr, *workArr;
-    rocblas_device_malloc mem(handle, size_tmptr, size_workArr);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
     if(!mem)
         return rocblas_status_memory_error;
 
-    tmptr = mem[0];
-    workArr = mem[1];
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     //  execution
-    return rocsolver_larfb_template<false, false, T>(
-        handle, side, trans, direct, storev, m, n, k, V, shiftV, ldv, stridev, F, shiftF, ldf,
-        stridef, A, shiftA, lda, stridea, batch_count, (T*)tmptr, (T**)workArr);
+    return rocsolver_larfb_template<false, T>(handle, side, trans, direct, storev, m, n, k, V,
+                                              shiftV, ldv, stridev, F, shiftF, ldf, stridef, A,
+                                              shiftA, lda, stridea, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE
