@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,6 +36,7 @@
 #include "rocauxiliary_larf.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -66,6 +67,29 @@ void rocsolver_orm2r_unm2r_getMemorySize(const rocblas_side side,
     // extra memory requirements for calling LARF
     rocsolver_larf_getMemorySize<BATCHED, T>(side, m, n, batch_count, size_scalars, size_Abyx,
                                              size_workArr);
+}
+
+template <bool BATCHED, typename T>
+void rocsolver_orm2r_unm2r_getMemorySize(const rocblas_side side,
+                                         const rocblas_int m,
+                                         const rocblas_int n,
+                                         const rocblas_int k,
+                                         const rocblas_int batch_count,
+                                         rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(m == 0 || n == 0 || k == 0 || batch_count == 0)
+        return;
+
+    work_helper->set_nested_capacity(1);
+
+    // extra memory requirements for calling LARF
+    rocsolver_larf_getMemorySize<BATCHED, T>(side, m, n, batch_count, work_helper->add_nested());
+
+    // size of temporary array for diagonal elements
+    size_t size_diag = sizeof(T) * batch_count;
+
+    work_helper->assign_sizes({size_diag});
 }
 
 template <bool COMPLEX, typename T, typename U>
@@ -211,6 +235,119 @@ rocblas_status rocsolver_orm2r_unm2r_template(rocblas_handle handle,
         rocsolver_larf_template(handle, side, nrow, ncol, A, shiftA + idx2D(i, i, lda), 1, strideA,
                                 (ipiv + i), strideP, C, shiftC + idx2D(ic, jc, ldc), ldc, strideC,
                                 batch_count, scalars, Abyx, workArr);
+
+        // restore original value of A(i,i)
+        ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                dim3(1, 1, 1), 0, stream, diag, 0, 1, A, shiftA + idx2D(i, i, lda),
+                                lda, strideA, 1);
+    }
+
+    // restore tau
+    if(COMPLEX && transpose)
+        rocsolver_lacgv_template<T>(handle, k, ipiv, 0, 1, strideP, batch_count);
+
+    return rocblas_status_success;
+}
+
+template <typename T, typename U, bool COMPLEX = rocblas_is_complex<T>>
+rocblas_status rocsolver_orm2r_unm2r_template(rocblas_handle handle,
+                                              const rocblas_side side,
+                                              const rocblas_operation trans,
+                                              const rocblas_int m,
+                                              const rocblas_int n,
+                                              const rocblas_int k,
+                                              U A,
+                                              const rocblas_stride shiftA,
+                                              const rocblas_int lda,
+                                              const rocblas_stride strideA,
+                                              T* ipiv,
+                                              const rocblas_stride strideP,
+                                              U C,
+                                              const rocblas_stride shiftC,
+                                              const rocblas_int ldc,
+                                              const rocblas_stride strideC,
+                                              const rocblas_int batch_count,
+                                              rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("orm2r_unm2r", "side:", side, "trans:", trans, "m:", m, "n:", n, "k:", k,
+                    "shiftA:", shiftA, "lda:", lda, "shiftC:", shiftC, "ldc:", ldc,
+                    "bc:", batch_count);
+
+    // quick return
+    if(!n || !m || !k || !batch_count)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // prepare workspace
+    auto larf_work = work_helper->get_nested(0);
+    T* diag = (T*)(*work_helper)[0];
+
+    // determine limits and indices
+    bool left = (side == rocblas_side_left);
+    bool transpose = (trans != rocblas_operation_none);
+    rocblas_int start, step, ncol, nrow, ic, jc;
+    if(left)
+    {
+        ncol = n;
+        jc = 0;
+        if(transpose)
+        {
+            start = -1;
+            step = 1;
+        }
+        else
+        {
+            start = k;
+            step = -1;
+        }
+    }
+    else
+    {
+        nrow = m;
+        ic = 0;
+        if(transpose)
+        {
+            start = k;
+            step = -1;
+        }
+        else
+        {
+            start = -1;
+            step = 1;
+        }
+    }
+
+    // conjugate tau
+    if(COMPLEX && transpose)
+        rocsolver_lacgv_template<T>(handle, k, ipiv, 0, 1, strideP, batch_count);
+
+    rocblas_int i;
+    for(rocblas_int j = 1; j <= k; ++j)
+    {
+        i = start + step * j; // current householder vector
+        if(left)
+        {
+            nrow = m - i;
+            ic = i;
+        }
+        else
+        {
+            ncol = n - i;
+            jc = i;
+        }
+
+        // insert one in A(i,i), i.e. the i-th element along the main diagonal,
+        // to build/apply the householder matrix
+        ROCSOLVER_LAUNCH_KERNEL((set_diag<T, rocblas_int>), dim3(batch_count, 1, 1), dim3(1, 1, 1),
+                                0, stream, diag, 0, 1, A, shiftA + idx2D(i, i, lda), lda, strideA,
+                                1, true);
+
+        // Apply current Householder reflector
+        rocsolver_larf_template(handle, side, nrow, ncol, A, shiftA + idx2D(i, i, lda), 1, strideA,
+                                (ipiv + i), strideP, C, shiftC + idx2D(ic, jc, ldc), ldc, strideC,
+                                batch_count, larf_work);
 
         // restore original value of A(i,i)
         ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
