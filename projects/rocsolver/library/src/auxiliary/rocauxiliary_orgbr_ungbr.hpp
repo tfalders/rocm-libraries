@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     April 2012
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,6 +36,7 @@
 #include "rocauxiliary_orgqr_ungqr.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -99,6 +100,57 @@ void rocsolver_orgbr_ungbr_getMemorySize(const rocblas_storev storev,
                                                             size_scalars, &s2, size_Abyx_tmptr,
                                                             size_trfact, size_workArr);
             *size_work = std::max(s1, s2);
+        }
+    }
+}
+
+template <bool BATCHED, typename T>
+void rocsolver_orgbr_ungbr_getMemorySize(const rocblas_storev storev,
+                                         const rocblas_int m,
+                                         const rocblas_int n,
+                                         const rocblas_int k,
+                                         const rocblas_int batch_count,
+                                         rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(m == 0 || n == 0 || batch_count == 0)
+        return;
+
+    if(storev == rocblas_column_wise)
+    {
+        // requirements for calling orgqr/ungqr
+        if(m >= k)
+        {
+            rocsolver_orgqr_ungqr_getMemorySize<BATCHED, T>(m, n, k, batch_count, work_helper);
+        }
+        else
+        {
+            work_helper->set_nested_capacity(1);
+
+            rocsolver_orgqr_ungqr_getMemorySize<BATCHED, T>(m - 1, m - 1, m - 1, batch_count,
+                                                            work_helper->add_nested());
+
+            size_t size_work = sizeof(T) * batch_count * (m - 1) * m / 2;
+            work_helper->assign_sizes({}, {size_work});
+        }
+    }
+
+    else
+    {
+        // requirements for calling orglq/unglq
+        if(n > k)
+        {
+            rocsolver_orglq_unglq_getMemorySize<BATCHED, T>(m, n, k, batch_count, work_helper);
+        }
+        else
+        {
+            work_helper->set_nested_capacity(1);
+
+            rocsolver_orglq_unglq_getMemorySize<BATCHED, T>(n - 1, n - 1, n - 1, batch_count,
+                                                            work_helper->add_nested());
+
+            size_t size_work = sizeof(T) * batch_count * (n - 1) * n / 2;
+            work_helper->assign_sizes({}, {size_work});
         }
     }
 }
@@ -236,6 +288,110 @@ rocblas_status rocsolver_orgbr_ungbr_template(rocblas_handle handle,
             rocsolver_orglq_unglq_template<BATCHED, STRIDED, T>(
                 handle, n - 1, n - 1, n - 1, A, shiftA + idx2D(1, 1, lda), lda, strideA, ipiv,
                 strideP, batch_count, scalars, work, Abyx_tmptr, trfact, workArr);
+        }
+    }
+
+    return rocblas_status_success;
+}
+
+template <bool BATCHED, typename T, typename U>
+rocblas_status rocsolver_orgbr_ungbr_template(rocblas_handle handle,
+                                              const rocblas_storev storev,
+                                              const rocblas_int m,
+                                              const rocblas_int n,
+                                              const rocblas_int k,
+                                              U A,
+                                              const rocblas_stride shiftA,
+                                              const rocblas_int lda,
+                                              const rocblas_stride strideA,
+                                              T* ipiv,
+                                              const rocblas_stride strideP,
+                                              const rocblas_int batch_count,
+                                              rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("orgbr_ungbr", "storev:", storev, "m:", m, "n:", n, "k:", k, "shiftA:", shiftA,
+                    "lda:", lda, "bc:", batch_count);
+
+    // quick return
+    if(!n || !m || !batch_count)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // if column-wise, compute orthonormal columns of matrix Q in the
+    // bi-diagonalization of a m-by-k matrix A (given by gebrd)
+    if(storev == rocblas_column_wise)
+    {
+        if(m >= k)
+        {
+            rocsolver_orgqr_ungqr_template<BATCHED, T>(handle, m, n, k, A, shiftA, lda, strideA,
+                                                       ipiv, strideP, batch_count, work_helper);
+        }
+        else
+        {
+            // prepare workspace
+            auto orgqr_work = work_helper->get_nested(0);
+            T* work = (T*)(*work_helper)[0];
+
+            // shift the householder vectors provided by gebrd as they come below the
+            // first subdiagonal
+            rocblas_stride strideW = rocblas_stride(m - 1) * m / 2; // number of elements to copy
+            rocblas_int ldw = m - 1;
+            rocblas_int blocks = (m - 2) / BS2 + 1;
+
+            // copy
+            ROCSOLVER_LAUNCH_KERNEL(copyshift_right<T>, dim3(blocks, blocks, batch_count),
+                                    dim3(BS2, BS2), 0, stream, true, m - 1, A, shiftA, lda, strideA,
+                                    work, 0, ldw, strideW);
+
+            // shift
+            ROCSOLVER_LAUNCH_KERNEL(copyshift_right<T>, dim3(blocks, blocks, batch_count),
+                                    dim3(BS2, BS2), 0, stream, false, m - 1, A, shiftA, lda,
+                                    strideA, work, 0, ldw, strideW);
+
+            // result
+            rocsolver_orgqr_ungqr_template<BATCHED, T>(handle, m - 1, m - 1, m - 1, A,
+                                                       shiftA + idx2D(1, 1, lda), lda, strideA,
+                                                       ipiv, strideP, batch_count, orgqr_work);
+        }
+    }
+
+    // if row-wise, compute orthonormal rows of matrix P' in the
+    // bi-diagonalization of a k-by-n matrix A (given by gebrd)
+    else
+    {
+        if(n > k)
+        {
+            rocsolver_orglq_unglq_template<BATCHED, T>(handle, m, n, k, A, shiftA, lda, strideA,
+                                                       ipiv, strideP, batch_count, work_helper);
+        }
+        else
+        {
+            // prepare workspace
+            auto orglq_work = work_helper->get_nested(0);
+            T* work = (T*)(*work_helper)[0];
+
+            // shift the householder vectors provided by gebrd as they come above the
+            // first superdiagonal
+            rocblas_stride strideW = rocblas_stride(n - 1) * n / 2; // number of elements to copy
+            rocblas_int ldw = n - 1;
+            rocblas_int blocks = (n - 2) / BS2 + 1;
+
+            // copy
+            ROCSOLVER_LAUNCH_KERNEL(copyshift_down<T>, dim3(blocks, blocks, batch_count),
+                                    dim3(BS2, BS2), 0, stream, true, n - 1, A, shiftA, lda, strideA,
+                                    work, 0, ldw, strideW);
+
+            // shift
+            ROCSOLVER_LAUNCH_KERNEL(copyshift_down<T>, dim3(blocks, blocks, batch_count),
+                                    dim3(BS2, BS2), 0, stream, false, n - 1, A, shiftA, lda,
+                                    strideA, work, 0, ldw, strideW);
+
+            // result
+            rocsolver_orglq_unglq_template<BATCHED, T>(handle, n - 1, n - 1, n - 1, A,
+                                                       shiftA + idx2D(1, 1, lda), lda, strideA,
+                                                       ipiv, strideP, batch_count, orglq_work);
         }
     }
 
