@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
 #include "rocauxiliary_larf.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -89,6 +90,20 @@ void rocsolver_org2r_ung2r_getMemorySize(const rocblas_int m,
     // memory requirements to call larf
     rocsolver_larf_getMemorySize<BATCHED, T>(rocblas_side_left, m, n, batch_count, size_scalars,
                                              size_Abyx, size_workArr);
+}
+
+template <bool BATCHED, typename T>
+void rocsolver_org2r_ung2r_getMemorySize(const rocblas_int m,
+                                         const rocblas_int n,
+                                         const rocblas_int batch_count,
+                                         rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(m == 0 || n == 0 || batch_count == 0)
+        return;
+
+    // memory requirements to call larf
+    rocsolver_larf_getMemorySize<BATCHED, T>(rocblas_side_left, m, n, batch_count, work_helper);
 }
 
 template <typename T, typename U>
@@ -166,6 +181,74 @@ rocblas_status rocsolver_org2r_ung2r_template(rocblas_handle handle,
                                        shiftA + idx2D(j, j, lda), 1, strideA, (ipiv + j), strideP,
                                        A, shiftA + idx2D(j, j + 1, lda), lda, strideA, batch_count,
                                        scalars, Abyx, workArr);
+        }
+
+        // set the diagonal element and negative tau
+        ROCSOLVER_LAUNCH_KERNEL(subtract_tau<T>, dim3(batch_count), dim3(1), 0, stream, j, j, A,
+                                shiftA, lda, strideA, ipiv + j, strideP);
+
+        // update i-th column -corresponding to H(i)-
+        if(j < m - 1)
+            rocblasCall_scal<T>(handle, m - j - 1, ipiv + j, strideP, A,
+                                shiftA + idx2D(j + 1, j, lda), 1, strideA, batch_count);
+    }
+
+    // restore values of tau
+    if(k > 0)
+    {
+        blocksx = (k - 1) / 128 + 1;
+        ROCSOLVER_LAUNCH_KERNEL(restau<T>, dim3(blocksx, batch_count), dim3(128), 0, stream, k,
+                                ipiv, strideP);
+    }
+
+    rocblas_set_pointer_mode(handle, old_mode);
+    return rocblas_status_success;
+}
+
+template <typename T, typename U>
+rocblas_status rocsolver_org2r_ung2r_template(rocblas_handle handle,
+                                              const rocblas_int m,
+                                              const rocblas_int n,
+                                              const rocblas_int k,
+                                              U A,
+                                              const rocblas_stride shiftA,
+                                              const rocblas_int lda,
+                                              const rocblas_stride strideA,
+                                              T* ipiv,
+                                              const rocblas_stride strideP,
+                                              const rocblas_int batch_count,
+                                              rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("org2r_ung2r", "m:", m, "n:", n, "k:", k, "shiftA:", shiftA, "lda:", lda,
+                    "bc:", batch_count);
+
+    // quick return
+    if(!n || !m || !batch_count)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // everything must be executed with scalars on the device
+    rocblas_pointer_mode old_mode;
+    rocblas_get_pointer_mode(handle, &old_mode);
+    rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device);
+
+    // Initialize identity matrix (non used columns)
+    rocblas_int blocksx = (m - 1) / 32 + 1;
+    rocblas_int blocksy = (n - 1) / 32 + 1;
+    ROCSOLVER_LAUNCH_KERNEL(org2r_init_ident<T>, dim3(blocksx, blocksy, batch_count), dim3(32, 32),
+                            0, stream, m, n, k, A, shiftA, lda, strideA);
+
+    for(rocblas_int j = k - 1; j >= 0; --j)
+    {
+        // apply H(i) to Q(i:m,i:n) from the left
+        if(j < n - 1)
+        {
+            rocsolver_larf_template<T>(handle, rocblas_side_left, m - j, n - j - 1, A,
+                                       shiftA + idx2D(j, j, lda), 1, strideA, (ipiv + j), strideP,
+                                       A, shiftA + idx2D(j, j + 1, lda), lda, strideA, batch_count,
+                                       work_helper);
         }
 
         // set the diagonal element and negative tau
