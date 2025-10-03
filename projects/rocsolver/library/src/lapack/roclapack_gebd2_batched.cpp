@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -59,42 +59,29 @@ rocblas_status rocsolver_gebd2_batched_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftA = 0;
+    rocblas_stride shiftA = 0;
 
     // batched execution
     rocblas_stride strideA = 0;
 
     // memory workspace sizes:
-    // size for constants in rocblas calls
-    size_t size_scalars;
-    // size of arrays of pointers (for batched cases) and re-usable workspace
-    size_t size_work_workArr;
-    // extra requirements for calling larf and larfg
-    size_t size_Abyx_norms;
-    rocsolver_gebd2_getMemorySize<true, T>(m, n, batch_count, &size_scalars, &size_work_workArr,
-                                           &size_Abyx_norms);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_gebd2_getMemorySize<true, T>(m, n, batch_count, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(handle, size_scalars, size_work_workArr,
-                                                      size_Abyx_norms);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *scalars, *work_workArr, *Abyx_norms;
-    rocblas_device_malloc mem(handle, size_scalars, size_work_workArr, size_Abyx_norms);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
 
     if(!mem)
         return rocblas_status_memory_error;
 
-    scalars = mem[0];
-    work_workArr = mem[1];
-    Abyx_norms = mem[2];
-    if(size_scalars > 0)
-        init_scalars(handle, (T*)scalars);
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
-    return rocsolver_gebd2_template<T>(handle, m, n, A, shiftA, lda, strideA, D, strideD, E,
-                                       strideE, tauq, strideQ, taup, strideP, batch_count,
-                                       (T*)scalars, work_workArr, (T*)Abyx_norms);
+    return rocsolver_gebd2_template<T>(handle, m, n, A, shiftA, lda, strideA, D, strideD, E, strideE,
+                                       tauq, strideQ, taup, strideP, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE

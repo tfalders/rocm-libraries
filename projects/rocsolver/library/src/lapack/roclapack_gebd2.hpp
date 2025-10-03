@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     June 2017
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,6 +37,7 @@
 #include "auxiliary/rocauxiliary_larfg.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -65,6 +66,23 @@ void rocsolver_gebd2_getMemorySize(const rocblas_int m,
     rocsolver_larfg_getMemorySize<T>(std::max(m, n), batch_count, &w2, &s2);
     *size_work_workArr = std::max(w1, w2);
     *size_Abyx_norms = std::max(s1, s2);
+}
+
+template <bool BATCHED, typename T>
+void rocsolver_gebd2_getMemorySize(const rocblas_int m,
+                                   const rocblas_int n,
+                                   const rocblas_int batch_count,
+                                   rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(m == 0 || n == 0 || batch_count == 0)
+        return;
+
+    work_helper->set_nested_capacity(2);
+
+    rocsolver_larf_getMemorySize<BATCHED, T>(rocblas_side_both, m, n, batch_count,
+                                             work_helper->add_nested());
+    rocsolver_larfg_getMemorySize<T>(std::max(m, n), batch_count, work_helper->add_nested());
 }
 
 template <typename T, typename S, typename U>
@@ -269,6 +287,198 @@ rocblas_status rocsolver_gebd2_template(rocblas_handle handle,
                                         shiftA + idx2D(j + 1, j, lda), 1, strideA, (tauq + j),
                                         strideQ, A, shiftA + idx2D(j + 1, j + 1, lda), lda, strideA,
                                         batch_count, scalars, Abyx_norms, (T**)work_workArr);
+
+                // restore tauq
+                if(COMPLEX)
+                    rocsolver_lacgv_template<T>(handle, 1, tauq, j, 1, strideQ, batch_count);
+
+                // restore original value of A(j,j+1)
+                ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                        dim3(1, 1, 1), 0, stream, E, j, strideE, A,
+                                        shiftA + idx2D(j + 1, j, lda), lda, strideA, 1);
+            }
+            else
+            {
+                // zero tauq(j)
+                ROCSOLVER_LAUNCH_KERNEL(reset_batch_info<T>, dim3(1, batch_count), dim3(1, 1), 0,
+                                        stream, tauq + j, strideQ, 1, 0);
+            }
+        }
+    }
+
+    return rocblas_status_success;
+}
+
+template <typename T, typename S, typename U, bool COMPLEX = rocblas_is_complex<T>>
+rocblas_status rocsolver_gebd2_template(rocblas_handle handle,
+                                        const rocblas_int m,
+                                        const rocblas_int n,
+                                        U A,
+                                        const rocblas_stride shiftA,
+                                        const rocblas_int lda,
+                                        const rocblas_stride strideA,
+                                        S* D,
+                                        const rocblas_stride strideD,
+                                        S* E,
+                                        const rocblas_stride strideE,
+                                        T* tauq,
+                                        const rocblas_stride strideQ,
+                                        T* taup,
+                                        const rocblas_stride strideP,
+                                        const rocblas_int batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("gebd2", "m:", m, "n:", n, "shiftA:", shiftA, "lda:", lda, "bc:", batch_count);
+
+    // quick return
+    if(m == 0 || n == 0 || batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // prepare workspace
+    auto larf_work = work_helper->get_nested(0);
+    auto larfg_work = work_helper->get_nested(1);
+
+    rocblas_int dim = std::min(m, n); // total number of pivots
+
+    if(m >= n)
+    {
+        // generate upper bidiagonal form
+        for(rocblas_int j = 0; j < n; j++)
+        {
+            // generate Householder reflector H(j)
+            rocsolver_larfg_template(handle, m - j, A, shiftA + idx2D(j, j, lda), A,
+                                     shiftA + idx2D(std::min(j + 1, m - 1), j, lda), 1, strideA,
+                                     (tauq + j), strideQ, batch_count, larfg_work);
+
+            // copy A(j,j) to D and insert one to build/apply the householder matrix
+            ROCSOLVER_LAUNCH_KERNEL((set_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                    dim3(1, 1, 1), 0, stream, D, j, strideD, A,
+                                    shiftA + idx2D(j, j, lda), lda, strideA, 1, true);
+
+            // Apply Householder reflector H(j)
+            if(j < n - 1)
+            {
+                // conjugate tauq
+                if(COMPLEX)
+                    rocsolver_lacgv_template<T>(handle, 1, tauq, j, 1, strideQ, batch_count);
+
+                rocsolver_larf_template(handle, rocblas_side_left, m - j, n - j - 1, A,
+                                        shiftA + idx2D(j, j, lda), 1, strideA, (tauq + j), strideQ,
+                                        A, shiftA + idx2D(j, j + 1, lda), lda, strideA, batch_count,
+                                        larf_work);
+
+                // restore tauq
+                if(COMPLEX)
+                    rocsolver_lacgv_template<T>(handle, 1, tauq, j, 1, strideQ, batch_count);
+            }
+
+            // restore original value of A(j,j)
+            ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                    dim3(1, 1, 1), 0, stream, D, j, strideD, A,
+                                    shiftA + idx2D(j, j, lda), lda, strideA, 1);
+
+            if(j < n - 1)
+            {
+                if(COMPLEX)
+                    rocsolver_lacgv_template<T>(handle, n - j - 1, A, shiftA + idx2D(j, j + 1, lda),
+                                                lda, strideA, batch_count);
+
+                // generate Householder reflector G(j)
+                rocsolver_larfg_template(handle, n - j - 1, A, shiftA + idx2D(j, j + 1, lda), A,
+                                         shiftA + idx2D(j, std::min(j + 2, n - 1), lda), lda,
+                                         strideA, (taup + j), strideP, batch_count, larfg_work);
+
+                // copy A(j,j+1) to E and insert one to build/apply the householder
+                // matrix
+                ROCSOLVER_LAUNCH_KERNEL((set_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                        dim3(1, 1, 1), 0, stream, E, j, strideE, A,
+                                        shiftA + idx2D(j, j + 1, lda), lda, strideA, 1, true);
+
+                // Apply Householder reflector G(j)
+                rocsolver_larf_template(handle, rocblas_side_right, m - j - 1, n - j - 1, A,
+                                        shiftA + idx2D(j, j + 1, lda), lda, strideA, (taup + j),
+                                        strideP, A, shiftA + idx2D(j + 1, j + 1, lda), lda, strideA,
+                                        batch_count, larf_work);
+
+                if(COMPLEX)
+                    rocsolver_lacgv_template<T>(handle, n - j - 1, A, shiftA + idx2D(j, j + 1, lda),
+                                                lda, strideA, batch_count);
+
+                // restore original value of A(j,j+1)
+                ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                        dim3(1, 1, 1), 0, stream, E, j, strideE, A,
+                                        shiftA + idx2D(j, j + 1, lda), lda, strideA, 1);
+            }
+            else
+            {
+                // zero taup(j)
+                ROCSOLVER_LAUNCH_KERNEL(reset_batch_info<T>, dim3(1, batch_count), dim3(1, 1), 0,
+                                        stream, taup + j, strideP, 1, 0);
+            }
+        }
+    }
+    else
+    {
+        // generate lower bidiagonal form
+        for(rocblas_int j = 0; j < m; j++)
+        {
+            if(COMPLEX)
+                rocsolver_lacgv_template<T>(handle, n - j, A, shiftA + idx2D(j, j, lda), lda,
+                                            strideA, batch_count);
+
+            // generate Householder reflector G(j)
+            rocsolver_larfg_template(handle, n - j, A, shiftA + idx2D(j, j, lda), A,
+                                     shiftA + idx2D(j, std::min(j + 1, n - 1), lda), lda, strideA,
+                                     (taup + j), strideP, batch_count, larfg_work);
+
+            // copy A(j,j) to D and insert one to build/apply the householder matrix
+            ROCSOLVER_LAUNCH_KERNEL((set_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                    dim3(1, 1, 1), 0, stream, D, j, strideD, A,
+                                    shiftA + idx2D(j, j, lda), lda, strideA, 1, true);
+
+            // Apply Householder reflector G(j)
+            if(j < m - 1)
+            {
+                rocsolver_larf_template(handle, rocblas_side_right, m - j - 1, n - j, A,
+                                        shiftA + idx2D(j, j, lda), lda, strideA, (taup + j),
+                                        strideP, A, shiftA + idx2D(j + 1, j, lda), lda, strideA,
+                                        batch_count, larf_work);
+            }
+
+            if(COMPLEX)
+                rocsolver_lacgv_template<T>(handle, n - j, A, shiftA + idx2D(j, j, lda), lda,
+                                            strideA, batch_count);
+
+            // restore original value of A(j,j)
+            ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                    dim3(1, 1, 1), 0, stream, D, j, strideD, A,
+                                    shiftA + idx2D(j, j, lda), lda, strideA, 1);
+
+            if(j < m - 1)
+            {
+                // generate Householder reflector H(j)
+                rocsolver_larfg_template(handle, m - j - 1, A, shiftA + idx2D(j + 1, j, lda), A,
+                                         shiftA + idx2D(std::min(j + 2, m - 1), j, lda), 1, strideA,
+                                         (tauq + j), strideQ, batch_count, larfg_work);
+
+                // copy A(j+1,j) to D and insert one to build/apply the householder
+                // matrix
+                ROCSOLVER_LAUNCH_KERNEL((set_diag<T, rocblas_int>), dim3(batch_count, 1, 1),
+                                        dim3(1, 1, 1), 0, stream, E, j, strideE, A,
+                                        shiftA + idx2D(j + 1, j, lda), lda, strideA, 1, true);
+
+                // conjugate tauq
+                if(COMPLEX)
+                    rocsolver_lacgv_template<T>(handle, 1, tauq, j, 1, strideQ, batch_count);
+
+                // Apply Householder reflector H(j)
+                rocsolver_larf_template(handle, rocblas_side_left, m - j - 1, n - j - 1, A,
+                                        shiftA + idx2D(j + 1, j, lda), 1, strideA, (tauq + j),
+                                        strideQ, A, shiftA + idx2D(j + 1, j + 1, lda), lda, strideA,
+                                        batch_count, larf_work);
 
                 // restore tauq
                 if(COMPLEX)

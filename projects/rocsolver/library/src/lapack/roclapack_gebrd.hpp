@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     November 2017
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,6 +37,7 @@
 #include "roclapack_gebd2.hpp"
 #include "rocsolver/rocsolver.h"
 #include "rocsolver_run_specialized_kernels.hpp"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -90,6 +91,47 @@ void rocsolver_gebrd_getMemorySize(const rocblas_int m,
         // size of matrix Y
         *size_Y = n * k;
         *size_Y *= sizeof(T) * batch_count;
+    }
+}
+
+template <bool BATCHED, typename T>
+void rocsolver_gebrd_getMemorySize(const rocblas_int m,
+                                   const rocblas_int n,
+                                   const rocblas_int batch_count,
+                                   rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(m == 0 || n == 0 || batch_count == 0)
+        return;
+
+    if(m <= GEBRD_GEBD2_SWITCHSIZE || n <= GEBRD_GEBD2_SWITCHSIZE)
+    {
+        // requirements for calling a single GEBD2
+        rocsolver_gebd2_getMemorySize<BATCHED, T>(m, n, batch_count, work_helper);
+    }
+
+    else
+    {
+        work_helper->set_nested_capacity(2);
+        rocblas_int k = GEBRD_GEBD2_SWITCHSIZE;
+        rocblas_int d = (std::min(m, n) - 1) / k + 1;
+
+        rocsolver_gebd2_getMemorySize<BATCHED, T>(m - d * k, n - d * k, batch_count,
+                                                  work_helper->add_nested());
+        rocsolver_labrd_getMemorySize<BATCHED, T>(m, n, k, batch_count, work_helper->add_nested());
+
+        // size of matrix X
+        size_t size_X = m * k * sizeof(T) * batch_count;
+
+        // size of matrix Y
+        size_t size_Y = n * k * sizeof(T) * batch_count;
+
+        // size of array of pointers (batched cases)
+        size_t size_workArr = 0;
+        if(BATCHED)
+            size_workArr = 2 * sizeof(T*) * batch_count;
+
+        work_helper->assign_sizes({size_X, size_Y}, {size_workArr});
     }
 }
 
@@ -199,6 +241,117 @@ rocblas_status rocsolver_gebrd_template(rocblas_handle handle,
         rocsolver_gebd2_template<T>(handle, m - j, n - j, A, shiftA + idx2D(j, j, lda), lda, strideA,
                                     D + j, strideD, E + j, strideE, tauq + j, strideQ, taup + j,
                                     strideP, batch_count, scalars, work_workArr, Abyx_norms);
+
+    rocblas_set_pointer_mode(handle, old_mode);
+    return rocblas_status_success;
+}
+
+template <bool BATCHED, typename T, typename S, typename U>
+rocblas_status rocsolver_gebrd_template(rocblas_handle handle,
+                                        const rocblas_int m,
+                                        const rocblas_int n,
+                                        U A,
+                                        const rocblas_stride shiftA,
+                                        const rocblas_int lda,
+                                        const rocblas_stride strideA,
+                                        S* D,
+                                        const rocblas_stride strideD,
+                                        S* E,
+                                        const rocblas_stride strideE,
+                                        T* tauq,
+                                        const rocblas_stride strideQ,
+                                        T* taup,
+                                        const rocblas_stride strideP,
+                                        const rocblas_int batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("gebrd", "m:", m, "n:", n, "shiftA:", shiftA, "lda:", lda, "bc:", batch_count);
+
+    // quick return
+    if(m == 0 || n == 0 || batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    T minone = -1;
+    T one = 1;
+    rocblas_int nb = GEBRD_BLOCKSIZE;
+    rocblas_int k = GEBRD_GEBD2_SWITCHSIZE;
+    rocblas_int dim = std::min(m, n); // total number of pivots
+    rocblas_int jb, j = 0;
+    rocblas_int blocks;
+
+    // if the matrix is small, use the unblocked variant of the algorithm
+    if(m <= k || n <= k)
+        return rocsolver_gebd2_template<T>(handle, m, n, A, shiftA, lda, strideA, D, strideD, E,
+                                           strideE, tauq, strideQ, taup, strideP, batch_count,
+                                           work_helper);
+
+    // everything must be executed with scalars on the host
+    rocblas_pointer_mode old_mode;
+    rocblas_get_pointer_mode(handle, &old_mode);
+    rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host);
+
+    // prepare workspace
+    auto gebd2_work = work_helper->get_nested(0);
+    auto labrd_work = work_helper->get_nested(1);
+    T* X = (T*)(*work_helper)[0];
+    T* Y = (T*)(*work_helper)[1];
+    T** workArr = (T**)(*work_helper)[2];
+
+    rocblas_stride shiftX = 0, shiftY = 0;
+    rocblas_int ldx = m, ldy = n;
+    rocblas_stride strideX = m * GEBRD_GEBD2_SWITCHSIZE, strideY = n * GEBRD_GEBD2_SWITCHSIZE;
+
+    while(j < dim - k)
+    {
+        // Reduce block to bidiagonal form
+        jb = std::min(dim - j, nb); // number of rows and columns in the block
+        rocsolver_labrd_template<T>(handle, m - j, n - j, jb, A, shiftA + idx2D(j, j, lda), lda,
+                                    strideA, D + j, strideD, E + j, strideE, tauq + j, strideQ,
+                                    taup + j, strideP, X, shiftX, ldx, strideX, Y, shiftY, ldy,
+                                    strideY, batch_count, labrd_work);
+
+        // update the rest of the matrix
+        rocsolver_gemm(handle, rocblas_operation_none, rocblas_operation_conjugate_transpose,
+                       m - j - jb, n - j - jb, jb, &minone, A, shiftA + idx2D(j + jb, j, lda), lda,
+                       strideA, Y, shiftY + jb, ldy, strideY, &one, A,
+                       shiftA + idx2D(j + jb, j + jb, lda), lda, strideA, batch_count, workArr);
+
+        rocsolver_gemm(handle, rocblas_operation_none, rocblas_operation_none, m - j - jb,
+                       n - j - jb, jb, &minone, X, shiftX + jb, ldx, strideX, A,
+                       shiftA + idx2D(j, j + jb, lda), lda, strideA, &one, A,
+                       shiftA + idx2D(j + jb, j + jb, lda), lda, strideA, batch_count, workArr);
+
+        blocks = (jb - 1) / 64 + 1;
+        if(m >= n)
+        {
+            ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, blocks, 1),
+                                    dim3(1, 64, 1), 0, stream, D, j, strideD, A,
+                                    shiftA + idx2D(j, j, lda), lda, strideA, jb);
+            ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, blocks, 1),
+                                    dim3(1, 64, 1), 0, stream, E, j, strideE, A,
+                                    shiftA + idx2D(j, j + 1, lda), lda, strideA, jb);
+        }
+        else
+        {
+            ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, blocks, 1),
+                                    dim3(1, 64, 1), 0, stream, D, j, strideD, A,
+                                    shiftA + idx2D(j, j, lda), lda, strideA, jb);
+            ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, blocks, 1),
+                                    dim3(1, 64, 1), 0, stream, E, j, strideE, A,
+                                    shiftA + idx2D(j + 1, j, lda), lda, strideA, jb);
+        }
+
+        j += nb;
+    }
+
+    // factor last block
+    if(j < dim)
+        rocsolver_gebd2_template<T>(handle, m - j, n - j, A, shiftA + idx2D(j, j, lda), lda,
+                                    strideA, D + j, strideD, E + j, strideE, tauq + j, strideQ,
+                                    taup + j, strideP, batch_count, gebd2_work);
 
     rocblas_set_pointer_mode(handle, old_mode);
     return rocblas_status_success;
