@@ -37,6 +37,7 @@
 #include "auxiliary/rocauxiliary_larfg.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -199,6 +200,30 @@ void rocsolver_geqr2_getMemorySize(const I m,
     *size_diag = sizeof(S) * std::min(m, n) * batch_count;
 }
 
+template <bool BATCHED, typename T, typename I>
+void rocsolver_geqr2_getMemorySize(const I m,
+                                   const I n,
+                                   const I batch_count,
+                                   rocsolver_workspace_helper* work_helper)
+{
+    using S = decltype(std::real(T{}));
+
+    // if quick return no workspace needed
+    if(m == 0 || n == 0 || batch_count == 0)
+        return;
+
+    work_helper->set_nested_capacity(2);
+
+    rocsolver_larf_getMemorySize<BATCHED, T>(rocblas_side_left, m, n, batch_count,
+                                             work_helper->add_nested());
+    rocsolver_larfg_getMemorySize<T>(m, batch_count, work_helper->add_nested());
+
+    // size of array to store temporary diagonal values
+    size_t size_diag = sizeof(S) * std::min(m, n) * batch_count;
+
+    work_helper->assign_sizes({size_diag});
+}
+
 template <typename T, typename I, typename U>
 rocblas_status rocsolver_geqr2_geqrf_argCheck(rocblas_handle handle,
                                               const I m,
@@ -288,6 +313,88 @@ rocblas_status rocsolver_geqr2_template(rocblas_handle handle,
                                     shiftA + idx2D(j, j, lda), (I)1, strideA, (ipiv + j), strideP,
                                     A, shiftA + idx2D(j, j + 1, lda), lda, strideA, batch_count,
                                     scalars, Abyx_norms, (T**)work_workArr);
+
+            // restore tau
+            if(COMPLEX)
+                rocsolver_lacgv_template<T>(handle, (I)1, ipiv, j, (I)1, strideP, batch_count);
+        }
+    }
+
+    // restore diagonal values of A
+    constexpr int DIAG_NTHREADS = 64;
+    I blocks = (dim - 1) / DIAG_NTHREADS + 1;
+    ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, I>), dim3(batch_count, blocks, 1),
+                            dim3(1, DIAG_NTHREADS, 1), 0, stream, (S*)diag, 0, dim, A, shiftA, lda,
+                            strideA, dim);
+
+    return rocblas_status_success;
+}
+
+template <typename T, typename I, typename U, bool COMPLEX = rocblas_is_complex<T>>
+rocblas_status rocsolver_geqr2_template(rocblas_handle handle,
+                                        const I m,
+                                        const I n,
+                                        U A,
+                                        const rocblas_stride shiftA,
+                                        const I lda,
+                                        const rocblas_stride strideA,
+                                        T* ipiv,
+                                        const rocblas_stride strideP,
+                                        const I batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("geqr2", "m:", m, "n:", n, "shiftA:", shiftA, "lda:", lda, "bc:", batch_count);
+    using S = decltype(std::real(T{}));
+
+    // quick return
+    if(m == 0 || n == 0 || batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // prepare workspace
+    auto larf_work = work_helper->get_nested(0);
+    auto larfg_work = work_helper->get_nested(1);
+    T* diag = (T*)(*work_helper)[0];
+
+    // get device prop
+    int device;
+    HIP_CHECK(hipGetDevice(&device));
+    hipDeviceProp_t props;
+    HIP_CHECK(hipGetDeviceProperties(&props, device));
+
+    I dim = std::min(m, n); // total number of pivots
+    for(I j = 0; j < dim; ++j)
+    {
+        I mm = m - j;
+        I nn = n - j;
+
+        const size_t lmemsize = ((256 / props.warpSize) + mm + nn + 1 + mm * nn) * sizeof(T);
+        if(lmemsize <= props.sharedMemPerBlock && nn == mm)
+        {
+            ROCSOLVER_LAUNCH_KERNEL((geqr2_kernel_small<256, T>), dim3(1, 1, batch_count), dim3(256),
+                                    lmemsize, stream, mm, nn, A, shiftA + idx2D(j, j, lda), lda,
+                                    strideA, (S*)diag + j, dim, ipiv + j, strideP);
+            break;
+        }
+
+        // generate Householder reflector to work on column j
+        rocsolver_larfg_template<T>(handle, m - j, A, shiftA + idx2D(j, j, lda), (S*)diag, j, dim,
+                                    A, shiftA + idx2D(std::min(j + 1, m - 1), j, lda), (I)1,
+                                    strideA, (ipiv + j), strideP, batch_count, larfg_work);
+
+        // Apply Householder reflector to the rest of matrix from the left
+        if(j < n - 1)
+        {
+            // conjugate tau
+            if(COMPLEX)
+                rocsolver_lacgv_template<T>(handle, (I)1, ipiv, j, (I)1, strideP, batch_count);
+
+            rocsolver_larf_template(handle, rocblas_side_left, m - j, n - j - 1, A,
+                                    shiftA + idx2D(j, j, lda), (I)1, strideA, (ipiv + j), strideP,
+                                    A, shiftA + idx2D(j, j + 1, lda), lda, strideA, batch_count,
+                                    larf_work);
 
             // restore tau
             if(COMPLEX)
