@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -68,60 +68,28 @@ rocblas_status rocsolver_gesvd_strided_batched_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftA = 0;
+    rocblas_stride shiftA = 0;
 
     // memory workspace sizes:
-    // size for constants in rocblas calls
-    size_t size_scalars;
-    // size of reusable workspace and array of pointers (batched case)
-    size_t size_work_workArr;
-    // extra requirements for calling orthogonal/unitary matrix operations and factorizations
-    size_t size_Abyx_norms_tmptr, size_Abyx_norms_trfact_X, size_diag_tmptr_Y;
-    // size of array tau to store householder scalars, plus extra requirements for calling BDSQR
-    size_t size_tau_splits;
-    // size of temporary arrays for copies
-    size_t size_tempArrayT, size_tempArrayC;
-    // size of array of pointers (only for batched case)
-    size_t size_workArr;
-
-    rocsolver_gesvd_getMemorySize<false, T, TT>(
-        left_svect, right_svect, m, n, batch_count, fast_alg, &size_scalars, &size_work_workArr,
-        &size_Abyx_norms_tmptr, &size_Abyx_norms_trfact_X, &size_diag_tmptr_Y, &size_tau_splits,
-        &size_tempArrayT, &size_tempArrayC, &size_workArr);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_gesvd_getMemorySize<false, T, TT>(left_svect, right_svect, m, n, batch_count,
+                                                fast_alg, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(
-            handle, size_scalars, size_work_workArr, size_Abyx_norms_tmptr, size_Abyx_norms_trfact_X,
-            size_diag_tmptr_Y, size_tau_splits, size_tempArrayT, size_tempArrayC, size_workArr);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *scalars, *work_workArr, *Abyx_norms_tmptr, *Abyx_norms_trfact_X, *diag_tmptr_Y, *tau_splits;
-    void *tempArrayT, *tempArrayC, *workArr;
-    rocblas_device_malloc mem(handle, size_scalars, size_work_workArr, size_Abyx_norms_tmptr,
-                              size_Abyx_norms_trfact_X, size_diag_tmptr_Y, size_tau_splits,
-                              size_tempArrayT, size_tempArrayC, size_workArr);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
 
     if(!mem)
         return rocblas_status_memory_error;
 
-    scalars = mem[0];
-    work_workArr = mem[1];
-    Abyx_norms_tmptr = mem[2];
-    Abyx_norms_trfact_X = mem[3];
-    diag_tmptr_Y = mem[4];
-    tau_splits = mem[5];
-    tempArrayT = mem[6];
-    tempArrayC = mem[7];
-    workArr = mem[8];
-    if(size_scalars > 0)
-        init_scalars(handle, (T*)scalars);
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
     return rocsolver_gesvd_template<false, true, T>(
         handle, left_svect, right_svect, m, n, A, shiftA, lda, strideA, S, strideS, U, ldu, strideU,
-        V, ldv, strideV, E, strideE, fast_alg, info, batch_count, (T*)scalars, work_workArr,
-        (T*)Abyx_norms_tmptr, (T*)Abyx_norms_trfact_X, (T*)diag_tmptr_Y, (T*)tau_splits,
-        (T*)tempArrayT, (T*)tempArrayC, (T**)workArr);
+        V, ldv, strideV, E, strideE, fast_alg, info, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE
