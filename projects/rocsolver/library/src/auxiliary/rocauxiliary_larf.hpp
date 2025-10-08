@@ -45,16 +45,16 @@ ROCSOLVER_BEGIN_NAMESPACE
 *   bytes of LDS memory is required. Grid dimensions = dim3(1, n, batch count)
 *   and block dimensions = dim3(NB_X).
 */
-template <int NB_X, typename T, typename I, typename U>
+template <int NB_X, typename T, typename I, typename U1, typename U2>
 ROCSOLVER_KERNEL void __launch_bounds__(NB_X) larf_left_kernel(const I m,
                                                                const I n,
-                                                               U xx,
+                                                               U1 xx,
                                                                const rocblas_stride shiftX,
                                                                const I incX,
                                                                const rocblas_stride strideX,
                                                                const T* tauA,
                                                                const rocblas_stride strideP,
-                                                               U AA,
+                                                               U2 AA,
                                                                const rocblas_stride shiftA,
                                                                const I lda,
                                                                const rocblas_stride strideA)
@@ -121,16 +121,16 @@ ROCSOLVER_KERNEL void __launch_bounds__(NB_X) larf_left_kernel(const I m,
 *   bytes of LDS memory is required. Grid dimensions = dim3(1, m, batch count)
 *   and block dimensions = dim3(NB_X).
 */
-template <int NB_X, typename T, typename I, typename U>
+template <int NB_X, typename T, typename I, typename U1, typename U2>
 ROCSOLVER_KERNEL void __launch_bounds__(NB_X) larf_right_kernel(const I m,
                                                                 const I n,
-                                                                U xx,
+                                                                U1 xx,
                                                                 const rocblas_stride shiftX,
                                                                 const I incX,
                                                                 const rocblas_stride strideX,
                                                                 const T* tauA,
                                                                 const rocblas_stride strideP,
-                                                                U AA,
+                                                                U2 AA,
                                                                 const rocblas_stride shiftA,
                                                                 const I lda,
                                                                 const rocblas_stride strideA)
@@ -270,7 +270,7 @@ void rocsolver_larf_getMemorySize(const rocblas_side side,
     // size of array of pointers to workspace
     size_t size_workArr = 0;
     if(BATCHED)
-        size_workArr = sizeof(T*) * batch_count;
+        size_workArr = 2 * sizeof(T*) * batch_count;
 
     work_helper->add_scalars<T>();
     work_helper->assign_sizes({size_Abyx, size_workArr});
@@ -420,18 +420,18 @@ rocblas_status rocsolver_larf_template(rocblas_handle handle,
     return rocblas_status_success;
 }
 
-template <typename T, typename I, typename U, bool COMPLEX = rocblas_is_complex<T>>
+template <typename T, typename I, typename U1, typename U2, bool COMPLEX = rocblas_is_complex<T>>
 rocblas_status rocsolver_larf_template(rocblas_handle handle,
                                        const rocblas_side side,
                                        const I m,
                                        const I n,
-                                       U x,
+                                       U1 x,
                                        const rocblas_stride shiftx,
                                        const I incx,
                                        const rocblas_stride stridex,
                                        const T* alpha,
                                        const rocblas_stride stridep,
-                                       U A,
+                                       U2 A,
                                        const rocblas_stride shiftA,
                                        const I lda,
                                        const rocblas_stride stridea,
@@ -522,12 +522,14 @@ rocblas_status rocsolver_larf_template(rocblas_handle handle,
     if(leftside)
     {
         rocblasCall_ger<COMPLEX, T, I>(handle, m, n, alpha, stridep, x, shiftx, incx, stridex, Abyx,
-                                       0, 1, order, A, shiftA, lda, stridea, batch_count, workArr);
+                                       0, 1, order, A, shiftA, lda, stridea, batch_count, workArr,
+                                       workArr + batch_count);
     }
     else
     {
         rocblasCall_ger<COMPLEX, T, I>(handle, m, n, alpha, stridep, Abyx, 0, 1, order, x, shiftx,
-                                       incx, stridex, A, shiftA, lda, stridea, batch_count, workArr);
+                                       incx, stridex, A, shiftA, lda, stridea, batch_count, workArr,
+                                       workArr + batch_count);
     }
 
     rocblas_set_pointer_mode(handle, old_mode);

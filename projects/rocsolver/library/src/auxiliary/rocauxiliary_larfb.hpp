@@ -717,7 +717,7 @@ rocblas_status rocsolver_larfb_inverse_template(rocblas_handle handle,
     return rocblas_status_success;
 }
 
-template <bool BATCHED, typename T, typename U>
+template <bool BATCHED, typename T, typename U1, typename U2>
 rocblas_status rocsolver_larfb_template(rocblas_handle handle,
                                         const rocblas_side side,
                                         const rocblas_operation trans,
@@ -726,7 +726,7 @@ rocblas_status rocsolver_larfb_template(rocblas_handle handle,
                                         const rocblas_int m,
                                         const rocblas_int n,
                                         const rocblas_int k,
-                                        U V,
+                                        U1 V,
                                         const rocblas_stride shiftV,
                                         const rocblas_int ldv,
                                         const rocblas_stride strideV,
@@ -734,7 +734,7 @@ rocblas_status rocsolver_larfb_template(rocblas_handle handle,
                                         const rocblas_stride shiftF,
                                         const rocblas_int ldf,
                                         const rocblas_stride strideF,
-                                        U A,
+                                        U2 A,
                                         const rocblas_stride shiftA,
                                         const rocblas_int lda,
                                         const rocblas_stride strideA,

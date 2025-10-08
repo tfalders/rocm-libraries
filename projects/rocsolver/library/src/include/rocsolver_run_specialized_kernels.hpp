@@ -42,18 +42,18 @@ ROCSOLVER_BEGIN_NAMESPACE
  */
 
 // larf
-template <typename T, typename I, typename U>
+template <typename T, typename I, typename U1, typename U2>
 rocblas_status larf_run_small(rocblas_handle handle,
                               const rocblas_side side,
                               const I m,
                               const I n,
-                              U x,
+                              U1 x,
                               const rocblas_stride shiftX,
                               const I incX,
                               const rocblas_stride strideX,
                               const T* tau,
                               const rocblas_stride strideP,
-                              U A,
+                              U2 A,
                               const rocblas_stride shiftA,
                               const I lda,
                               const rocblas_stride strideA,

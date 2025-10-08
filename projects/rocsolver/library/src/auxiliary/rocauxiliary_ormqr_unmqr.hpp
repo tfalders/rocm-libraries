@@ -420,20 +420,20 @@ rocblas_status rocsolver_ormqr_unmqr_template(rocblas_handle handle,
     return rocblas_status_success;
 }
 
-template <bool BATCHED, typename T, typename U>
+template <bool BATCHED, typename T, typename U1, typename U2>
 rocblas_status rocsolver_ormqr_unmqr_template(rocblas_handle handle,
                                               const rocblas_side side,
                                               const rocblas_operation trans,
                                               const rocblas_int m,
                                               const rocblas_int n,
                                               const rocblas_int k,
-                                              U A,
+                                              U1 A,
                                               const rocblas_stride shiftA,
                                               const rocblas_int lda,
                                               const rocblas_stride strideA,
                                               T* ipiv,
                                               const rocblas_stride strideP,
-                                              U C,
+                                              U2 C,
                                               const rocblas_stride shiftC,
                                               const rocblas_int ldc,
                                               const rocblas_stride strideC,

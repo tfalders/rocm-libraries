@@ -44,17 +44,17 @@ ROCSOLVER_BEGIN_NAMESPACE
     the library size.
 *************************************************************/
 
-template <int MAX_THDS, typename T, typename I, typename U>
+template <int MAX_THDS, typename T, typename I, typename U1, typename U2>
 ROCSOLVER_KERNEL void __launch_bounds__(MAX_THDS)
     larf_left_kernel_small(const I m,
                            const I n,
-                           U xx,
+                           U1 xx,
                            const rocblas_stride shiftX,
                            const I incX,
                            const rocblas_stride strideX,
                            const T* tauA,
                            const rocblas_stride strideP,
-                           U AA,
+                           U2 AA,
                            const rocblas_stride shiftA,
                            const I lda,
                            const rocblas_stride strideA)
@@ -93,17 +93,17 @@ ROCSOLVER_KERNEL void __launch_bounds__(MAX_THDS)
     }
 }
 
-template <int MAX_THDS, typename T, typename I, typename U>
+template <int MAX_THDS, typename T, typename I, typename U1, typename U2>
 ROCSOLVER_KERNEL void __launch_bounds__(MAX_THDS)
     larf_right_kernel_small(const I m,
                             const I n,
-                            U xx,
+                            U1 xx,
                             const rocblas_stride shiftX,
                             const I incX,
                             const rocblas_stride strideX,
                             const T* tauA,
                             const rocblas_stride strideP,
-                            U AA,
+                            U2 AA,
                             const rocblas_stride shiftA,
                             const I lda,
                             const rocblas_stride strideA)
@@ -146,18 +146,18 @@ ROCSOLVER_KERNEL void __launch_bounds__(MAX_THDS)
     Launchers of specialized  kernels
 *************************************************************/
 
-template <typename T, typename I, typename U>
+template <typename T, typename I, typename U1, typename U2>
 rocblas_status larf_run_small(rocblas_handle handle,
                               const rocblas_side side,
                               const I m,
                               const I n,
-                              U x,
+                              U1 x,
                               const rocblas_stride shiftX,
                               const I incX,
                               const rocblas_stride strideX,
                               const T* tau,
                               const rocblas_stride strideP,
-                              U A,
+                              U2 A,
                               const rocblas_stride shiftA,
                               const I lda,
                               const rocblas_stride strideA,
@@ -222,11 +222,11 @@ rocblas_status larf_run_small(rocblas_handle handle,
     Instantiation macros
 *************************************************************/
 
-#define INSTANTIATE_LARF_SMALL(T, I, U)                                                        \
-    template rocblas_status larf_run_small<T, I, U>(                                           \
-        rocblas_handle handle, const rocblas_side side, const I m, const I n, U x,             \
+#define INSTANTIATE_LARF_SMALL(T, I, U1, U2)                                                   \
+    template rocblas_status larf_run_small<T, I, U1, U2>(                                      \
+        rocblas_handle handle, const rocblas_side side, const I m, const I n, U1 x,            \
         const rocblas_stride shiftX, const I incX, const rocblas_stride strideX, const T* tau, \
-        const rocblas_stride strideP, U A, const rocblas_stride shiftA, const I lda,           \
+        const rocblas_stride strideP, U2 A, const rocblas_stride shiftA, const I lda,          \
         const rocblas_stride strideA, const I batch_count)
 
 ROCSOLVER_END_NAMESPACE
