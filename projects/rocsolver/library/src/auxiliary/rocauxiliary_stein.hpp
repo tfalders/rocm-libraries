@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,6 +36,7 @@
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
 #include "rocsolver_prng.hpp"
+#include "rocsolver_workspace_helper.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
 
@@ -353,6 +354,24 @@ void rocsolver_stein_getMemorySize(const rocblas_int n,
 }
 
 template <typename T, typename S>
+void rocsolver_stein_getMemorySize(const rocblas_int n,
+                                   const rocblas_int batch_count,
+                                   rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(n == 0 || !batch_count)
+        return;
+
+    // size of workspace
+    size_t size_work = sizeof(S) * 5 * n * batch_count;
+
+    // size of integer workspace
+    size_t size_iwork = sizeof(rocblas_int) * n * batch_count;
+
+    work_helper->assign_sizes({size_work, size_iwork});
+}
+
+template <typename T, typename S>
 rocblas_status rocsolver_stein_argCheck(rocblas_handle handle,
                                         const rocblas_int n,
                                         S* D,
@@ -435,6 +454,72 @@ rocblas_status rocsolver_stein_template(rocblas_handle handle,
     // quick return
     if(n == 0)
         return rocblas_status_success;
+
+    S eps = get_epsilon<T>();
+    S ssfmin = get_safemin<T>();
+
+    dim3 grid(1, batch_count, 1);
+    dim3 threads(STEIN_MAX_THDS, 1, 1);
+    size_t lmemsize = STEIN_MAX_THDS * (2 * sizeof(S) + sizeof(rocblas_int));
+    ROCSOLVER_LAUNCH_KERNEL(stein_kernel<T>, grid, threads, lmemsize, stream, n, D + shiftD,
+                            strideD, E + shiftE, strideE, nev, W + shiftW, strideW, iblock,
+                            strideIblock, isplit, strideIsplit, Z, shiftZ, ldz, strideZ, ifail,
+                            strideIfail, info, work, iwork, eps, ssfmin);
+
+    return rocblas_status_success;
+}
+
+template <typename T, typename S, typename U>
+rocblas_status rocsolver_stein_template(rocblas_handle handle,
+                                        const rocblas_int n,
+                                        S* D,
+                                        const rocblas_stride shiftD,
+                                        const rocblas_stride strideD,
+                                        S* E,
+                                        const rocblas_stride shiftE,
+                                        const rocblas_stride strideE,
+                                        rocblas_int* nev,
+                                        S* W,
+                                        const rocblas_stride shiftW,
+                                        const rocblas_stride strideW,
+                                        rocblas_int* iblock,
+                                        const rocblas_stride strideIblock,
+                                        rocblas_int* isplit,
+                                        const rocblas_stride strideIsplit,
+                                        U Z,
+                                        const rocblas_stride shiftZ,
+                                        const rocblas_int ldz,
+                                        const rocblas_stride strideZ,
+                                        rocblas_int* ifail,
+                                        const rocblas_stride strideIfail,
+                                        rocblas_int* info,
+                                        const rocblas_int batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("stein", "n:", n, "shiftD:", shiftD, "shiftE:", shiftE, "shiftW:", shiftW,
+                    "shiftZ:", shiftZ, "ldz:", ldz, "bc:", batch_count);
+
+    // quick return
+    if(batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    dim3 gridReset(blocksReset, 1, 1);
+    dim3 threadsReset(BS1, 1, 1);
+
+    // info = 0
+    ROCSOLVER_LAUNCH_KERNEL(reset_info, gridReset, threadsReset, 0, stream, info, batch_count, 0);
+
+    // quick return
+    if(n == 0)
+        return rocblas_status_success;
+
+    // prepare workspace
+    S* work = (S*)(*work_helper)[0];
+    rocblas_int* iwork = (rocblas_int*)(*work_helper)[1];
 
     S eps = get_epsilon<T>();
     S ssfmin = get_safemin<T>();

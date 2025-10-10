@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -55,10 +55,10 @@ rocblas_status rocsolver_stein_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftD = 0;
-    rocblas_int shiftE = 0;
-    rocblas_int shiftW = 0;
-    rocblas_int shiftZ = 0;
+    rocblas_stride shiftD = 0;
+    rocblas_stride shiftE = 0;
+    rocblas_stride shiftW = 0;
+    rocblas_stride shiftZ = 0;
 
     // normal (non-batched non-strided) execution
     rocblas_stride strideD = 0;
@@ -71,27 +71,25 @@ rocblas_status rocsolver_stein_impl(rocblas_handle handle,
     rocblas_int batch_count = 1;
 
     // memory workspace sizes:
-    // size for lagtf/stein workspace
-    size_t size_work, size_iwork;
-    rocsolver_stein_getMemorySize<T, S>(n, batch_count, &size_work, &size_iwork);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_stein_getMemorySize<T, S>(n, batch_count, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(handle, size_work, size_iwork);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
     void *work, *iwork;
-    rocblas_device_malloc mem(handle, size_work, size_iwork);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
     if(!mem)
         return rocblas_status_memory_error;
 
-    work = mem[0];
-    iwork = mem[1];
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
     return rocsolver_stein_template<T>(handle, n, D, shiftD, strideD, E, shiftE, strideE, nev, W,
                                        shiftW, strideW, iblock, strideIblock, isplit, strideIsplit,
                                        Z, shiftZ, ldz, strideZ, ifail, strideIfail, info,
-                                       batch_count, (S*)work, (rocblas_int*)iwork);
+                                       batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE
