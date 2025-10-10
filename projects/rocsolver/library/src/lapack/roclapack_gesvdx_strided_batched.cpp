@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2022-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2022-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -74,112 +74,29 @@ rocblas_status rocsolver_gesvdx_strided_batched_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftA = 0;
+    rocblas_stride shiftA = 0;
 
     // memory workspace sizes:
-    // reusable workspace (for calls to gebrd, dbsvdx, ormqr, geqrf, etc)
-    size_t size_scalars;
-    size_t size_WS_svdx1;
-    size_t size_WS_svdx2_lqrf1_brd1;
-    size_t size_WS_svdx3_lqrf2_brd2;
-    size_t size_WS_svdx4_lqrf3_brd3;
-    size_t size_WS_svdx5_brd4;
-    size_t size_WS_svdx6;
-    size_t size_WS_svdx7;
-    size_t size_WS_svdx8;
-    size_t size_WS_svdx9;
-    size_t size_WS_svdx10_mlqr1_mbr1;
-    size_t size_WS_svdx11_mlqr2_mbr2;
-    size_t size_WS_svdx12_mlqr3_mbr3;
-    // temporary arrays for internal computations
-    // (contain the bidiagonal form and the householder scalars)
-    size_t size_tmpDE;
-    size_t size_tauqp;
-    size_t size_tmpZ;
-    size_t size_tau;
-    size_t size_tmpT;
-    // size of array of pointers (only for batched case)
-    size_t size_workArr;
-    size_t size_workArr2;
-
-    rocsolver_gesvdx_getMemorySize<false, T, TT>(
-        left_svect, right_svect, srange, m, n, il, iu, batch_count, &size_scalars, &size_WS_svdx1,
-        &size_WS_svdx2_lqrf1_brd1, &size_WS_svdx3_lqrf2_brd2, &size_WS_svdx4_lqrf3_brd3,
-        &size_WS_svdx5_brd4, &size_WS_svdx6, &size_WS_svdx7, &size_WS_svdx8, &size_WS_svdx9,
-        &size_WS_svdx10_mlqr1_mbr1, &size_WS_svdx11_mlqr2_mbr2, &size_WS_svdx12_mlqr3_mbr3,
-        &size_tmpDE, &size_tauqp, &size_tmpZ, &size_tau, &size_tmpT, &size_workArr, &size_workArr2);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_gesvdx_getMemorySize<false, T, TT>(left_svect, right_svect, srange, m, n, il, iu,
+                                                 batch_count, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(
-            handle, size_scalars, size_WS_svdx1, size_WS_svdx2_lqrf1_brd1, size_WS_svdx3_lqrf2_brd2,
-            size_WS_svdx4_lqrf3_brd3, size_WS_svdx5_brd4, size_WS_svdx6, size_WS_svdx7,
-            size_WS_svdx8, size_WS_svdx9, size_WS_svdx10_mlqr1_mbr1, size_WS_svdx11_mlqr2_mbr2,
-            size_WS_svdx12_mlqr3_mbr3, size_tmpDE, size_tauqp, size_tmpZ, size_tau, size_tmpT,
-            size_workArr, size_workArr2);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void* scalars;
-    void* WS_svdx1;
-    void* WS_svdx2_lqrf1_brd1;
-    void* WS_svdx3_lqrf2_brd2;
-    void* WS_svdx4_lqrf3_brd3;
-    void* WS_svdx5_brd4;
-    void* WS_svdx6;
-    void* WS_svdx7;
-    void* WS_svdx8;
-    void* WS_svdx9;
-    void* WS_svdx10_mlqr1_mbr1;
-    void* WS_svdx11_mlqr2_mbr2;
-    void* WS_svdx12_mlqr3_mbr3;
-    void* tmpDE;
-    void* tauqp;
-    void* tmpZ;
-    void* tau;
-    void* tmpT;
-    void* workArr;
-    void* workArr2;
-
-    rocblas_device_malloc mem(handle, size_scalars, size_WS_svdx1, size_WS_svdx2_lqrf1_brd1,
-                              size_WS_svdx3_lqrf2_brd2, size_WS_svdx4_lqrf3_brd3,
-                              size_WS_svdx5_brd4, size_WS_svdx6, size_WS_svdx7, size_WS_svdx8,
-                              size_WS_svdx9, size_WS_svdx10_mlqr1_mbr1, size_WS_svdx11_mlqr2_mbr2,
-                              size_WS_svdx12_mlqr3_mbr3, size_tmpDE, size_tauqp, size_tmpZ,
-                              size_tau, size_tmpT, size_workArr, size_workArr2);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
 
     if(!mem)
         return rocblas_status_memory_error;
 
-    scalars = mem[0];
-    WS_svdx1 = mem[1];
-    WS_svdx2_lqrf1_brd1 = mem[2];
-    WS_svdx3_lqrf2_brd2 = mem[3];
-    WS_svdx4_lqrf3_brd3 = mem[4];
-    WS_svdx5_brd4 = mem[5];
-    WS_svdx6 = mem[6];
-    WS_svdx7 = mem[7];
-    WS_svdx8 = mem[8];
-    WS_svdx9 = mem[9];
-    WS_svdx10_mlqr1_mbr1 = mem[10];
-    WS_svdx11_mlqr2_mbr2 = mem[11];
-    WS_svdx12_mlqr3_mbr3 = mem[12];
-    tmpDE = mem[13];
-    tauqp = mem[14];
-    tmpZ = mem[15];
-    tau = mem[16];
-    tmpT = mem[17];
-    workArr = mem[18];
-    workArr2 = mem[19];
-    if(size_scalars > 0)
-        init_scalars(handle, (T*)scalars);
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
-    return rocsolver_gesvdx_template<false, true, T>(
-        handle, left_svect, right_svect, srange, m, n, A, shiftA, lda, strideA, vl, vu, il, iu, nsv,
-        S, strideS, U, ldu, strideU, V, ldv, strideV, ifail, strideF, info, batch_count, (T*)scalars,
-        (rocblas_int*)WS_svdx1, WS_svdx2_lqrf1_brd1, WS_svdx3_lqrf2_brd2, WS_svdx4_lqrf3_brd3,
-        WS_svdx5_brd4, (rocblas_int*)WS_svdx6, (rocblas_int*)WS_svdx7, (rocblas_int*)WS_svdx8,
-        (rocblas_int*)WS_svdx9, WS_svdx10_mlqr1_mbr1, WS_svdx11_mlqr2_mbr2, WS_svdx12_mlqr3_mbr3,
-        (TT*)tmpDE, (T*)tauqp, (TT*)tmpZ, (T*)tau, (T*)tmpT, (T**)workArr, (T**)size_workArr2);
+    return rocsolver_gesvdx_template<false, true, T>(handle, left_svect, right_svect, srange, m, n,
+                                                     A, shiftA, lda, strideA, vl, vu, il, iu, nsv,
+                                                     S, strideS, U, ldu, strideU, V, ldv, strideV,
+                                                     ifail, strideF, info, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE
