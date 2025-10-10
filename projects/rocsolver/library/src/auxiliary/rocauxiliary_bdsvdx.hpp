@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2016-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -187,6 +187,40 @@ void rocsolver_bdsvdx_getMemorySize(const rocblas_int n,
     *size_Stmp = sizeof(T) * 2 * n * batch_count;
 }
 
+// Helper to calculate workspace size requirements
+template <typename T>
+void rocsolver_bdsvdx_getMemorySize(const rocblas_int n,
+                                    const rocblas_int batch_count,
+                                    rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(n == 0 || !batch_count)
+        return;
+
+    work_helper->set_nested_capacity(2);
+
+    // extra requirements for computing the eigenvalues (stebz)
+    rocsolver_stebz_getMemorySize<T>(2 * n, batch_count, work_helper->add_nested());
+
+    // extra requirements for computing the eigenvectors (stein)
+    rocsolver_stein_getMemorySize<T, T>(2 * n, batch_count, work_helper->add_nested());
+
+    // size of arrays for temporary submatrix indices
+    size_t size_nsplit = sizeof(rocblas_int) * batch_count;
+    size_t size_iblock = sizeof(rocblas_int) * 2 * n * batch_count;
+    size_t size_isplit_map = sizeof(rocblas_int) * 2 * n * batch_count;
+
+    // size of arrays for temporary tridiagonal matrix
+    size_t size_Dtgk = sizeof(T) * 2 * n * batch_count;
+    size_t size_Etgk = sizeof(T) * 2 * n * batch_count;
+
+    // size of array for temporary singular values
+    size_t size_Stmp = sizeof(T) * 2 * n * batch_count;
+
+    work_helper->assign_sizes(
+        {size_nsplit, size_iblock, size_isplit_map, size_Dtgk, size_Etgk, size_Stmp});
+}
+
 // Helper to check argument correctnesss
 template <typename T, typename U>
 rocblas_status rocsolver_bdsvdx_argCheck(rocblas_handle handle,
@@ -345,6 +379,120 @@ rocblas_status rocsolver_bdsvdx_template(rocblas_handle handle,
         rocsolver_stein_template<T>(handle, ntgk, Dtgk, 0, ntgk, Etgk, 0, ntgk, nsv, Stmp, 0, ntgk,
                                     iblock, ntgk, isplit_map, ntgk, Z, shiftZ, ldz, strideZ, ifail,
                                     strideF, info, batch_count, work2_pivmin, work1_iwork);
+
+        // sort eigenvalues and vectors
+        ROCSOLVER_LAUNCH_KERNEL(syevx_sort_eigs<T>, dim3(1, batch_count, 1), dim3(BS1, 1, 1), 0,
+                                stream, ntgk, nsv, Stmp, ntgk, Z, shiftZ, ldz, strideZ, ifail,
+                                strideF, info, isplit_map);
+
+        // take absolute value of eigenvalues, reorder and normalize eigenvector elements, and negate elements of V
+        ROCSOLVER_LAUNCH_KERNEL(bdsvdx_reorder_vect<T>, dim3(1, batch_count, 1), dim3(BS1, 1, 1), 0,
+                                stream, uplo, n, nsv, S, strideS, Z, shiftZ, ldz, strideZ, Stmp);
+    }
+
+    return rocblas_status_success;
+}
+
+// bdsvdx template function implementation
+template <typename T, typename U>
+rocblas_status rocsolver_bdsvdx_template(rocblas_handle handle,
+                                         const rocblas_fill uplo,
+                                         const rocblas_svect svect,
+                                         const rocblas_srange srange,
+                                         const rocblas_int n,
+                                         T* D,
+                                         const rocblas_stride strideD,
+                                         T* E,
+                                         const rocblas_stride strideE,
+                                         const T vl,
+                                         const T vu,
+                                         const rocblas_int il,
+                                         const rocblas_int iu,
+                                         rocblas_int* nsv,
+                                         T* S,
+                                         const rocblas_stride strideS,
+                                         U Z,
+                                         const rocblas_stride shiftZ,
+                                         const rocblas_int ldz,
+                                         const rocblas_stride strideZ,
+                                         rocblas_int* ifail,
+                                         const rocblas_stride strideF,
+                                         rocblas_int* info,
+                                         const rocblas_int batch_count,
+                                         rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("bdsvdx", "uplo:", uplo, "svect:", svect, "srange:", srange, "n:", n, "vl:", vl,
+                    "vu:", vu, "il:", il, "iu:", iu, "ldz:", ldz, "shiftZ:", shiftZ,
+                    "bc:", batch_count);
+
+    // quick return
+    if(batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    // set info = 0
+    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocksReset, 1, 1), dim3(BS1, 1, 1), 0, stream, info,
+                            batch_count, 0);
+
+    // quick return
+    if(n == 0)
+        return rocblas_status_success;
+
+    // prepare workspace
+    auto stebz_work = work_helper->get_nested(0);
+    auto stein_work = work_helper->get_nested(1);
+    rocblas_int* nsplit = (rocblas_int*)(*work_helper)[0];
+    rocblas_int* iblock = (rocblas_int*)(*work_helper)[1];
+    rocblas_int* isplit_map = (rocblas_int*)(*work_helper)[2];
+    T* Dtgk = (T*)(*work_helper)[3];
+    T* Etgk = (T*)(*work_helper)[4];
+    T* Stmp = (T*)(*work_helper)[5];
+
+    // zero out diagonal of tridiagonal matrix (Dtgk)
+    rocblas_int blocksZero = (2 * n * batch_count - 1) / BS1 + 1;
+    ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocksZero, 1, 1), dim3(BS1, 1, 1), 0, stream, Dtgk,
+                            2 * n * batch_count, 0);
+
+    // populate off-diagonal of tridiagonal matrix (Etgk) by interleaving entries of D and E
+    rocblas_int blocksCopy = (n - 1) / BS1 + 1;
+    dim3 gridCopy(1, blocksCopy, batch_count);
+    dim3 threadsCopy(1, BS1);
+
+    ROCSOLVER_LAUNCH_KERNEL((copy_mat<T, T*>), gridCopy, threadsCopy, 0, stream, 1, n, D, 0, 1,
+                            strideD, Etgk, 0, 2, 2 * n);
+    ROCSOLVER_LAUNCH_KERNEL((copy_mat<T, T*>), gridCopy, threadsCopy, 0, stream, 1, n - 1, E, 0, 1,
+                            strideE, Etgk, 1, 2, 2 * n);
+
+    rocblas_int ntgk = 2 * n;
+    rocblas_erange range
+        = (srange == rocblas_srange_value ? rocblas_erange_value : rocblas_erange_index);
+    rocblas_eorder order
+        = (svect == rocblas_svect_none ? rocblas_eorder_entire : rocblas_eorder_blocks);
+    T vltgk = (srange == rocblas_srange_value ? -vu : 0);
+    T vutgk = (srange == rocblas_srange_value ? -vl : 0);
+    rocblas_int iltgk = (srange == rocblas_srange_index ? il : 1);
+    rocblas_int iutgk = (srange == rocblas_srange_index ? iu : n);
+
+    // compute eigenvalues of tridiagonal matrix
+    rocsolver_stebz_template<T>(handle, range, order, ntgk, vltgk, vutgk, iltgk, iutgk, 0, Dtgk, 0,
+                                ntgk, Etgk, 0, ntgk, nsv, nsplit, Stmp, ntgk, iblock, ntgk,
+                                isplit_map, ntgk, info, batch_count, stebz_work);
+
+    if(svect == rocblas_svect_none)
+    {
+        // take absolute value of eigenvalues
+        ROCSOLVER_LAUNCH_KERNEL(bdsvdx_abs_eigs<T>, dim3(blocksCopy, batch_count, 1),
+                                dim3(BS1, 1, 1), 0, stream, n, nsv, S, strideS, Stmp);
+    }
+    else
+    {
+        // compute eigenvectors of tridiagonal matrix
+        rocsolver_stein_template<T>(handle, ntgk, Dtgk, 0, ntgk, Etgk, 0, ntgk, nsv, Stmp, 0, ntgk,
+                                    iblock, ntgk, isplit_map, ntgk, Z, shiftZ, ldz, strideZ, ifail,
+                                    strideF, info, batch_count, stein_work);
 
         // sort eigenvalues and vectors
         ROCSOLVER_LAUNCH_KERNEL(syevx_sort_eigs<T>, dim3(1, batch_count, 1), dim3(BS1, 1, 1), 0,

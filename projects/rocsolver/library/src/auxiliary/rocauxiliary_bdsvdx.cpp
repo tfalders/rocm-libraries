@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2022-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2022-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -61,7 +61,7 @@ rocblas_status rocsolver_bdsvdx_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftZ = 0;
+    rocblas_stride shiftZ = 0;
 
     // normal (non-batched non-strided) execution
     rocblas_stride strideD = 0;
@@ -72,48 +72,23 @@ rocblas_status rocsolver_bdsvdx_impl(rocblas_handle handle,
     rocblas_int batch_count = 1;
 
     // memory workspace sizes:
-    // size of reusable workspaces (for calling STEBZ and STEIN)
-    size_t size_work1_iwork, size_work2_pivmin, size_Esqr, size_bounds, size_inter, size_ninter;
-    // size for temporary arrays
-    size_t size_nsplit, size_iblock, size_isplit_map, size_Dtgk, size_Etgk, size_Stmp;
-    rocsolver_bdsvdx_getMemorySize<T>(n, batch_count, &size_work1_iwork, &size_work2_pivmin,
-                                      &size_Esqr, &size_bounds, &size_inter, &size_ninter,
-                                      &size_nsplit, &size_iblock, &size_isplit_map, &size_Dtgk,
-                                      &size_Etgk, &size_Stmp);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_bdsvdx_getMemorySize<T>(n, batch_count, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(
-            handle, size_work1_iwork, size_work2_pivmin, size_Esqr, size_bounds, size_inter,
-            size_ninter, size_nsplit, size_iblock, size_isplit_map, size_Dtgk, size_Etgk, size_Stmp);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *work1_iwork, *work2_pivmin, *Esqr, *bounds, *inter, *ninter, *nsplit, *iblock,
-        *isplit_map, *Stmp, *Dtgk, *Etgk;
-    rocblas_device_malloc mem(handle, size_work1_iwork, size_work2_pivmin, size_Esqr, size_bounds,
-                              size_inter, size_ninter, size_nsplit, size_iblock, size_isplit_map,
-                              size_Dtgk, size_Etgk, size_Stmp);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
     if(!mem)
         return rocblas_status_memory_error;
 
-    work1_iwork = mem[0];
-    work2_pivmin = mem[1];
-    Esqr = mem[2];
-    bounds = mem[3];
-    inter = mem[4];
-    ninter = mem[5];
-    nsplit = mem[6];
-    iblock = mem[7];
-    isplit_map = mem[8];
-    Dtgk = mem[9];
-    Etgk = mem[10];
-    Stmp = mem[11];
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
-    return rocsolver_bdsvdx_template<T>(
-        handle, uplo, svect, srange, n, D, strideD, E, strideE, vl, vu, il, iu, nsv, S, strideS, Z,
-        shiftZ, ldz, strideZ, ifail, strideIfail, info, batch_count, (rocblas_int*)work1_iwork,
-        (T*)work2_pivmin, (T*)Esqr, (T*)bounds, (T*)inter, (rocblas_int*)ninter, (rocblas_int*)nsplit,
-        (rocblas_int*)iblock, (rocblas_int*)isplit_map, (T*)Dtgk, (T*)Etgk, (T*)Stmp);
+    return rocsolver_bdsvdx_template<T>(handle, uplo, svect, srange, n, D, strideD, E, strideE, vl,
+                                        vu, il, iu, nsv, S, strideS, Z, shiftZ, ldz, strideZ, ifail,
+                                        strideIfail, info, batch_count, &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE
