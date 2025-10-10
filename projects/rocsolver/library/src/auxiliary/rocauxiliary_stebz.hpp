@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2022-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2022-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
 #include "lapack_device_functions.hpp"
 #include "rocblas.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_workspace_helper.hpp"
 
 #define STEBZ_SPLIT_THDS 256
 #define IBISEC_BLKS 64
@@ -1023,6 +1024,40 @@ void rocsolver_stebz_getMemorySize(const rocblas_int n,
     *size_ninter = sizeof(rocblas_int) * 4 * n * batch_count;
 }
 
+// Helper to calculate workspace size requirements
+template <typename T>
+void rocsolver_stebz_getMemorySize(const rocblas_int n,
+                                   const rocblas_int batch_count,
+                                   rocsolver_workspace_helper* work_helper)
+{
+    // if quick return no workspace needed
+    if(n == 0 || !batch_count)
+        return;
+
+    // to store temporary indices or sizes in different kernels
+    size_t size_work = sizeof(rocblas_int) * n * batch_count;
+
+    // to store the value of minimum pivot
+    size_t size_pivmin = sizeof(T) * batch_count;
+
+    // to store the square of the off-diagonal elements
+    size_t size_Esqr = sizeof(T) * (n - 1) * batch_count;
+
+    // to store the bounds of the half-open interval
+    // where the eigenvalues will be searched
+    size_t size_bounds = sizeof(T) * 2 * batch_count;
+
+    // to store the bounds of the different intervals during bisection
+    size_t size_inter = sizeof(T) * 4 * n * batch_count;
+
+    // to store the number of eigenvalues corresponding to
+    // each bound of the different intervals during bisection
+    size_t size_ninter = sizeof(rocblas_int) * 4 * n * batch_count;
+
+    work_helper->assign_sizes(
+        {size_work, size_pivmin, size_Esqr, size_bounds, size_inter, size_ninter});
+}
+
 // Helper to check argument correctnesss
 template <typename T>
 rocblas_status rocsolver_stebz_argCheck(rocblas_handle handle,
@@ -1138,6 +1173,116 @@ rocblas_status rocsolver_stebz_template(rocblas_handle handle,
 
         return rocblas_status_success;
     }
+
+    // numerics constants:
+    // machine epsilon
+    T eps = get_epsilon<T>();
+    // smallest safe real (i.e. 1/sfmin does not overflow)
+    T sfmin = get_safemin<T>();
+    // absolute tolerance for evaluating when an eigenvalue interval is small
+    // enough to consider it as converged. By default, if abstol = 0, set this to
+    // the best accuracy value
+    T atol = (abstol == 0) ? 2 * sfmin : abstol;
+
+    // split matrix into independent blocks and prepare for iterative bisection
+    ROCSOLVER_LAUNCH_KERNEL(stebz_splitting_kernel<T>, dim3(1, batch_count), dim3(STEBZ_SPLIT_THDS),
+                            0, stream, range, n, vlow, vup, ilow, iup, D, shiftD, strideD, E,
+                            shiftE, strideE, nsplit, W, strideW, IS, strideIS, work, pivmin, Esqr,
+                            bounds, inter, ninter, eps, sfmin);
+
+    // Implement iterative bisection on each split block.
+    // The next kernel has IBISEC_BLKS thread-blocks with IBISEC_THDS threads.
+    // Each thread works with as many non-converged intervals as needed on each iteration.
+    // Each thread-block is working with as many split-off blocks as needed to cover
+    // the entire matrix.
+
+    /** (TODO: in the future, we can evaluate if transferring nsplit -the number of
+        split-off blocks- into the host, to launch exactly that amount of thread-blocks,
+        could give better performance) **/
+
+    ROCSOLVER_LAUNCH_KERNEL(stebz_bisection_kernel<T>, dim3(IBISEC_BLKS, batch_count),
+                            dim3(IBISEC_THDS), 0, stream, range, n, atol, D, shiftD, strideD, E,
+                            shiftE, strideE, nsplit, W, strideW, IB, strideIB, IS, strideIS, info,
+                            work, pivmin, Esqr, bounds, inter, ninter, eps, sfmin);
+
+    // Finally, synthesize the results from all the split blocks
+    ROCSOLVER_LAUNCH_KERNEL(stebz_synthesis_kernel<T>, gridReset, threads, 0, stream, range, order, n,
+                            ilow, iup, D, shiftD, strideD, nev, nsplit, W, strideW, IB, strideIB, IS,
+                            strideIS, batch_count, work, pivmin, Esqr, bounds, inter, ninter, eps);
+
+    return rocblas_status_success;
+}
+
+// stebz template function implementation
+template <typename T, typename U>
+rocblas_status rocsolver_stebz_template(rocblas_handle handle,
+                                        const rocblas_erange range,
+                                        const rocblas_eorder order,
+                                        const rocblas_int n,
+                                        const T vlow,
+                                        const T vup,
+                                        const rocblas_int ilow,
+                                        const rocblas_int iup,
+                                        const T abstol,
+                                        U D,
+                                        const rocblas_stride shiftD,
+                                        const rocblas_stride strideD,
+                                        U E,
+                                        const rocblas_stride shiftE,
+                                        const rocblas_stride strideE,
+                                        rocblas_int* nev,
+                                        rocblas_int* nsplit,
+                                        T* W,
+                                        const rocblas_stride strideW,
+                                        rocblas_int* IB,
+                                        const rocblas_stride strideIB,
+                                        rocblas_int* IS,
+                                        const rocblas_stride strideIS,
+                                        rocblas_int* info,
+                                        const rocblas_int batch_count,
+                                        rocsolver_workspace_helper* work_helper)
+{
+    ROCSOLVER_ENTER("stebz", "erange:", range, "eorder:", order, "n:", n, "vl:", vlow, "vu:", vup,
+                    "il:", ilow, "iu:", iup, "abstol:", abstol, "shiftD:", shiftD,
+                    "shiftE:", shiftE, "bc:", batch_count);
+
+    // quick return (no batch)
+    if(batch_count == 0)
+        return rocblas_status_success;
+
+    hipStream_t stream;
+    rocblas_get_stream(handle, &stream);
+
+    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    dim3 gridReset(blocksReset, 1, 1);
+    dim3 threads(BS1, 1, 1);
+
+    // info = nev = nsplit = 0
+    ROCSOLVER_LAUNCH_KERNEL(reset_info, gridReset, threads, 0, stream, nev, batch_count, 0);
+    ROCSOLVER_LAUNCH_KERNEL(reset_info, gridReset, threads, 0, stream, nsplit, batch_count, 0);
+    ROCSOLVER_LAUNCH_KERNEL(reset_info, gridReset, threads, 0, stream, info, batch_count, 0);
+
+    // quick return (dimension zero)
+    if(n == 0)
+        return rocblas_status_success;
+
+    // quick return (dimension 1)
+    if(n == 1)
+    {
+        ROCSOLVER_LAUNCH_KERNEL(stebz_case1_kernel<T>, gridReset, threads, 0, stream, range, vlow,
+                                vup, D, shiftD, strideD, nev, nsplit, W, strideW, IB, strideIB, IS,
+                                strideIS, batch_count);
+
+        return rocblas_status_success;
+    }
+
+    // prepare workspace
+    rocblas_int* work = (rocblas_int*)(*work_helper)[0];
+    T* pivmin = (T*)(*work_helper)[1];
+    T* Esqr = (T*)(*work_helper)[2];
+    T* bounds = (T*)(*work_helper)[3];
+    T* inter = (T*)(*work_helper)[4];
+    rocblas_int* ninter = (rocblas_int*)(*work_helper)[5];
 
     // numerics constants:
     // machine epsilon

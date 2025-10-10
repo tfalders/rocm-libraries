@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2022-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2022-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -61,8 +61,8 @@ rocblas_status rocsolver_stebz_impl(rocblas_handle handle,
         return st;
 
     // working with unshifted arrays
-    rocblas_int shiftD = 0;
-    rocblas_int shiftE = 0;
+    rocblas_stride shiftD = 0;
+    rocblas_stride shiftE = 0;
 
     // normal (non-batched non-strided) execution
     rocblas_stride strideD = 0;
@@ -73,33 +73,24 @@ rocblas_status rocsolver_stebz_impl(rocblas_handle handle,
     rocblas_int batch_count = 1;
 
     // memory workspace sizes:
-    size_t size_work, size_pivmin, size_Esqr, size_bounds, size_inter, size_ninter;
-    rocsolver_stebz_getMemorySize<T>(n, batch_count, &size_work, &size_pivmin, &size_Esqr,
-                                     &size_bounds, &size_inter, &size_ninter);
+    rocsolver_workspace_helper work_helper;
+    rocsolver_stebz_getMemorySize<T>(n, batch_count, &work_helper);
 
     if(rocblas_is_device_memory_size_query(handle))
-        return rocblas_set_optimal_device_memory_size(handle, size_work, size_pivmin, size_Esqr,
-                                                      size_bounds, size_inter, size_ninter);
+        return rocblas_set_optimal_device_memory_size(handle, work_helper.get_total_size<T>());
 
     // memory workspace allocation
-    void *work, *pivmin, *Esqr, *bounds, *inter, *ninter;
-    rocblas_device_malloc mem(handle, size_work, size_pivmin, size_Esqr, size_bounds, size_inter,
-                              size_ninter);
+    rocblas_device_malloc mem(handle, work_helper.get_total_size<T>());
     if(!mem)
         return rocblas_status_memory_error;
 
-    work = mem[0];
-    pivmin = mem[1];
-    Esqr = mem[2];
-    bounds = mem[3];
-    inter = mem[4];
-    ninter = mem[5];
+    ROCBLAS_CHECK(work_helper.assign_buffer<T>(handle, mem[0]));
 
     // execution
-    return rocsolver_stebz_template<T>(
-        handle, erange, eorder, n, vl, vu, il, iu, abstol, D, shiftD, strideD, E, shiftE, strideE,
-        nev, nsplit, W, strideW, iblock, strideIblock, isplit, strideIsplit, info, batch_count,
-        (rocblas_int*)work, (T*)pivmin, (T*)Esqr, (T*)bounds, (T*)inter, (rocblas_int*)ninter);
+    return rocsolver_stebz_template<T>(handle, erange, eorder, n, vl, vu, il, iu, abstol, D, shiftD,
+                                       strideD, E, shiftE, strideE, nev, nsplit, W, strideW, iblock,
+                                       strideIblock, isplit, strideIsplit, info, batch_count,
+                                       &work_helper);
 }
 
 ROCSOLVER_END_NAMESPACE
