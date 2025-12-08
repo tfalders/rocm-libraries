@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2021-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2021-2025 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -62,6 +62,9 @@ ROCSOLVER_BEGIN_NAMESPACE
     std::unique_ptr<rocsolver_logger::scope_guard<T>> _log_token;                           \
     do                                                                                      \
     {                                                                                       \
+        rocsolver_log_begin();                                                              \
+        rocsolver_log_set_layer_mode(rocblas_layer_mode_log_trace);                         \
+        rocsolver_log_set_max_levels(1);                                                    \
         if(rocsolver_logger::is_logging_enabled())                                          \
         {                                                                                   \
             rocsolver_logger::instance()->log_enter_top_level<T>(handle, "rocsolver", name, \
@@ -434,7 +437,10 @@ public:
         ~scope_guard()
         {
             if(top_level)
+            {
                 rocsolver_logger::instance()->log_exit_top_level<T>(handle);
+                rocsolver_log_end();
+            }
             else
                 rocsolver_logger::instance()->log_exit<T>(handle);
         }
