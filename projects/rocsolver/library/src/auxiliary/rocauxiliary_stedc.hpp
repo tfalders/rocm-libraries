@@ -1758,13 +1758,21 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM) stedc_sort(const rocblas_int
         {
             int x = chunk * chunk_width + i * hipBlockDim_x + hipThreadIdx_x;
             if(x < n)
+            {
+                // if constexpr(rocblas_is_complex<T>)
+                //     printf("%i %i %i write to bvalT[%i] %f\n", hipBlockIdx_x, hipBlockIdx_y, hipThreadIdx_x, i, src[x].real());
                 bvalT[i] = src[x];
+            }
         }
         for(int i = 0; i < regs; i++)
         {
             int x = chunk * chunk_width + i * hipBlockDim_x + hipThreadIdx_x;
             if(x < n)
+            {
+                // if constexpr(rocblas_is_complex<T>)
+                //     printf("%i %i %i write to dst[%i] %f\n", hipBlockIdx_x, hipBlockIdx_y, hipThreadIdx_x, ldcout * pos+x, bvalT[i].real());
                 dst[x] = bvalT[i];
+            }
         }
     }
 }
@@ -1826,16 +1834,16 @@ void rocsolver_stedc_getMemorySize(const rocblas_evect evect,
         rocsolver_sterf_getMemorySize<S>(n, batch_count, size_work_stack);
     }
 
-    // if size is too small with classic solver
-    else if(n < STEDC_MIN_DC_SIZE)
-    {
-        *size_tempvect = 0;
-        *size_tempgemm = 0;
-        *size_workArr = 0;
-        *size_splits_map = 0;
-        *size_tmpz = 0;
-        rocsolver_steqr_getMemorySize<T, S>(evect, n, batch_count, size_work_stack);
-    }
+    // // if size is too small with classic solver
+    // else if(n < STEDC_MIN_DC_SIZE)
+    // {
+    //     *size_tempvect = 0;
+    //     *size_tempgemm = 0;
+    //     *size_workArr = 0;
+    //     *size_splits_map = 0;
+    //     *size_tmpz = 0;
+    //     rocsolver_steqr_getMemorySize<T, S>(evect, n, batch_count, size_work_stack);
+    // }
 
     // otherwise use divide and conquer algorithm:
     else
@@ -1955,12 +1963,12 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
                                     batch_count, static_cast<rocblas_int*>(work_stack));
     }
 
-    // if size is too small with classic solver, use steqr
-    else if(n < STEDC_MIN_DC_SIZE)
-    {
-        rocsolver_steqr_template<T>(handle, evect, n, D, shiftD, strideD, E, shiftE, strideE, C,
-                                    shiftC, ldc, strideC, info, batch_count, work_stack);
-    }
+    // // if size is too small with classic solver, use steqr
+    // else if(n < STEDC_MIN_DC_SIZE)
+    // {
+    //     rocsolver_steqr_template<T>(handle, evect, n, D, shiftD, strideD, E, shiftE, strideE, C,
+    //                                 shiftC, ldc, strideC, info, batch_count, work_stack);
+    // }
 
     // otherwise use divide and conquer algorithm:
     else
@@ -2002,6 +2010,9 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
         rocblas_int groupsn = (n - 1) / BS2 + 1;
         ROCSOLVER_LAUNCH_KERNEL(init_ident<S>, dim3(groupsn, groupsn, batch_count), dim3(BS2, BS2),
                                 0, stream, n, n, V, 0, ldv, strideV);
+        //print_device_matrix<S>(std::cerr, "D start", 1, n, D+shiftD, 1);
+        //print_device_matrix<S>(std::cerr, "E start", 1, n-1, E+shiftE, 1);
+        print_device_matrix<S>(std::cerr, "V ident", n, n, V, ldv);
 
         // 1. divide phase
         //-----------------------------
@@ -2015,6 +2026,8 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
         ROCSOLVER_LAUNCH_KERNEL((stedc_solve_kernel<S>), dim3(blks, batch_count), dim3(64), 0,
                                 stream, levs, n, D + shiftD, strideD, E + shiftE, strideE, V, 0,
                                 ldv, strideV, info, (S*)work_stack, splits, eps, ssfmin, ssfmax);
+        //print_device_matrix<S>(std::cerr, "D after solve", 1, n, D+shiftD, 1);
+        //print_device_matrix<S>(std::cerr, "E after solve", 1, n-1, E+shiftE, 1);
 
         // 3. merge phase
         //----------------
@@ -2179,16 +2192,23 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
                                     dim3(BS2, BS2), 0, stream, copymat_from_buffer, n, n, C, shiftC,
                                     ldc, strideC, tempgemm);
         }
+        print_device_matrix<S>(std::cerr, "V after update", n, n, V, ldv);
+        print_device_matrix<T>(std::cerr, "C after update", n, n, C, ldc);
+        //print_device_matrix<T>(std::cerr, "tempgemm after update", n, n, (T*)tempgemm, n);
 
         ROCSOLVER_LAUNCH_KERNEL(stedc_copyD, dim3(1, batch_count), dim3(STEDC_BDIM), 0, stream, n,
                                 D + shiftD, strideD, tmpz, n);
+        //print_device_matrix<S>(std::cerr, "D after copy", 1, n, D+shiftD, 1);
 
         ROCSOLVER_LAUNCH_KERNEL(stedc_copyC<T>, dim3(n, batch_count), dim3(STEDC_BDIM), 0, stream,
                                 n, C, shiftC, ldc, strideC, (T*)tempgemm, 0, n, n * n);
+        print_device_matrix<T>(std::cerr, "tempgemm after copy", n, n, (T*)tempgemm, n);
 
         ROCSOLVER_LAUNCH_KERNEL(stedc_sort<T>, dim3(n, batch_count), dim3(STEDC_BDIM), 0, stream, n,
                                 tmpz, n, D + shiftD, strideD, (T*)tempgemm, 0, n, n * n, C, shiftC,
                                 ldc, strideC);
+        //print_device_matrix<S>(std::cerr, "D after sort", 1, n, D+shiftD, 1);
+        //print_device_matrix<T>(std::cerr, "C after sort", n, n, C, ldc);
 
         rocblas_set_pointer_mode(handle, old_mode);
     }
