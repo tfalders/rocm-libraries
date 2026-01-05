@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2018-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,14 +32,6 @@
 #include <cstdlib>
 #include <ostream>
 #include <stdexcept>
-
-#if __has_include(<filesystem>)
-#include <filesystem>
-namespace fs = std::filesystem;
-#else
-#include <experimental/filesystem>
-namespace fs = std::experimental::filesystem;
-#endif
 
 #include <fmt/core.h>
 #include <fmt/ostream.h>
@@ -153,9 +145,6 @@ inline std::ostream& operator<<(std::ostream& os, printable_char x)
 {
     return os << char(x);
 }
-
-// location of the sparse data directory for the re-factorization tests
-fs::path get_sparse_data_dir();
 
 /// Combines `seed` with the hash of `value`, following the spirit of
 /// `boost::hash_combine`.

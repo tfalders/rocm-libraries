@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2020-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2020-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,6 +32,75 @@
 #ifdef ROCSOLVER_LIBRARY
 ROCSOLVER_BEGIN_NAMESPACE
 #endif
+
+// Return the path to the currently running executable
+std::string rocsolver_exepath()
+{
+#ifdef _WIN32
+
+    std::vector<TCHAR> result(MAX_PATH + 1);
+    DWORD length = 0;
+    for(;;)
+    {
+        length = GetModuleFileNameA(nullptr, result.data(), result.size());
+        if(length < result.size() - 1)
+        {
+            result.resize(length + 1);
+            break;
+        }
+        result.resize(result.size() * 2);
+    }
+
+    fs::path exepath(result.begin(), result.end());
+    exepath = exepath.remove_filename();
+    exepath += exepath.empty() ? "" : "/";
+    return exepath.string();
+
+#else
+    std::string pathstr;
+    char* path = realpath("/proc/self/exe", 0);
+    if(path)
+    {
+        char* p = strrchr(path, '/');
+        if(p)
+        {
+            p[1] = 0;
+            pathstr = path;
+        }
+        free(path);
+    }
+    return pathstr;
+#endif
+}
+
+fs::path get_sparse_data_dir()
+{
+    // first check an environment variable
+    if(const char* datadir = std::getenv("ROCSOLVER_TEST_DATA"))
+        return fs::path{datadir};
+
+    std::vector<std::string> considered;
+
+    // check relative to the running executable
+    fs::path exe_path = fs::path(rocsolver_exepath());
+    std::vector<fs::path> candidates = {"../share/rocsolver/test", "sparsedata"};
+    for(const fs::path& candidate : candidates)
+    {
+        std::error_code ec;
+        fs::path exe_relative = fs::canonical(exe_path / candidate, ec);
+        if(!ec)
+            return exe_relative;
+        considered.push_back(exe_relative.string());
+    }
+
+    fmt::print(stderr,
+               "Warning: default sparse data directories not found. "
+               "Defaulting to current working directory.\nExecutable location: {}\n"
+               "Paths considered:\n{}\n",
+               exe_path.string(), fmt::join(considered, "\n"));
+
+    return fs::current_path();
+}
 
 /***********************************************************************
  * timing functions                                                    *

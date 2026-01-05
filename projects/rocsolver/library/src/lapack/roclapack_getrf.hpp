@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
 #include "rocblas.hpp"
 #include "roclapack_getf2.hpp"
 #include "rocsolver/rocsolver.h"
+#include "rocsolver_hybrid_storage.hpp"
 #include "rocsolver_run_specialized_kernels.hpp"
 
 ROCSOLVER_BEGIN_NAMESPACE
@@ -470,9 +471,12 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
                              I* pivotidx,
                              const I offset,
                              I* permut_idx,
-                             const rocblas_stride stridePI)
+                             const rocblas_stride stridePI,
+                             std::vector<float>& gold1,
+                             std::vector<float>& gold2)
 {
     static constexpr bool ISBATCHED = BATCHED || STRIDED;
+    using S = decltype(std::real(T{}));
 
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
@@ -485,11 +489,13 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
     // the actual position of the panel-block in the matrix is:
     rocblas_stride shiftA = r_shiftA + idx2D(0, offset, inca, lda);
 
-    I blk = getrf_get_innerBlkSize<ISBATCHED, T>(mm, nn, pivot);
+    //I blk = getrf_get_innerBlkSize<ISBATCHED, T>(mm, nn, pivot);
+    I blk = 24;
     I jb;
     I dimx, dimy, blocks, blocksy;
     dim3 grid, threads;
     size_t lmemsize;
+    printf("panelLU function on the host: sub-dividing panel in sub-panels of %d columns...\n", blk);
 
     // Main loop
     for(I k = 0; k < nn; k += blk)
@@ -501,6 +507,43 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
                                                inca, lda, strideA, ipiv, shiftP + k, strideP, info,
                                                batch_count, scalars, pivotval, pivotidx, pivot,
                                                offset + k, permut_idx, stridePI);
+
+        if constexpr(std::is_same<T, float>::value)
+        {
+            if(k > 0)
+            {
+                rocsolver_hybrid_storage<float, rocblas_int, U> result;
+                ROCBLAS_CHECK(
+                    result.init_async(mm * nn * lda, A, shiftA, strideA, batch_count, stream));
+                HIP_CHECK(hipStreamSynchronize(stream));
+
+                bool found = false;
+                for(int nb = 0; nb < batch_count; nb++)
+                {
+                    float tol = std::min(mm, nn) * get_epsilon<float>();
+                    float* hA = result[nb];
+                    float* hG
+                        = (k == blk ? gold1.data() + 70 * 70 * nb : gold2.data() + 70 * 70 * nb);
+                    for(int i = 0; i < mm; i++)
+                    {
+                        for(int j = 0; j < nn; j++)
+                        {
+                            float rel_error
+                                = std::abs(hA[i + j * 70] - hG[i + j * 70] / hG[i + j * 70]);
+                            if(rel_error >= tol)
+                            {
+                                printf(
+                                    "Data mismatch at %d,%d for batch %d: Expected: %f, Actual: %f "
+                                    "(check thread at x=%d, y=%d)\n",
+                                    k + i, k + j, nb, hG[i + j * 70], hA[i + j * 70], i, nb);
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if(pivot)
         {
             dimx = jb;
@@ -674,6 +717,20 @@ rocblas_status rocsolver_getrf_template(rocblas_handle handle,
 
     // size of outer blocks
     I blk = getrf_get_blksize<ISBATCHED, T>(dim, pivot);
+    printf("GETRF function on the host: matrix will be divided in blocks of size %d...\n", blk);
+
+    std::vector<float> gold1(70 * 70 * 3);
+    std::vector<float> gold2(70 * 70 * 3);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24_0", 70, 70, gold1.data(), 70);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24_1", 70, 70,
+                gold1.data() + 70 * 70, 70);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24_2", 70, 70,
+                gold1.data() + 70 * 70 * 2, 70);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48_0", 70, 70, gold2.data(), 70);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48_1", 70, 70,
+                gold2.data() + 70 * 70, 70);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48_2", 70, 70,
+                gold2.data() + 70 * 70 * 2, 70);
 
     if(blk == 0)
         return rocsolver_getf2_template<ISBATCHED, T>(handle, m, n, A, shiftA, inca, lda, strideA,
@@ -709,18 +766,18 @@ rocblas_status rocsolver_getrf_template(rocblas_handle handle,
         if(pivot || panel)
         {
             // factorize outer block panel
-            getrf_panelLU<BATCHED, STRIDED, T>(handle, m - j, jb, n, A, shiftA + j * inca, inca,
-                                               lda, strideA, ipiv, shiftP + j, strideP, info,
-                                               batch_count, pivot, scalars, work1, work2, work3,
-                                               work4, optim_mem, pivotval, pivotidx, j, iipiv, m);
+            getrf_panelLU<BATCHED, STRIDED, T>(handle, m - j, jb, n, A, shiftA + j * inca, inca, lda,
+                                               strideA, ipiv, shiftP + j, strideP, info, batch_count,
+                                               pivot, scalars, work1, work2, work3, work4, optim_mem,
+                                               pivotval, pivotidx, j, iipiv, m, gold1, gold2);
         }
         else
         {
             // factorize only outer diagonal block
             getrf_panelLU<BATCHED, STRIDED, T>(handle, jb, jb, n, A, shiftA + j * inca, inca, lda,
-                                               strideA, ipiv, shiftP + j, strideP, info,
-                                               batch_count, pivot, scalars, work1, work2, work3,
-                                               work4, optim_mem, pivotval, pivotidx, j, iipiv, m);
+                                               strideA, ipiv, shiftP + j, strideP, info, batch_count,
+                                               pivot, scalars, work1, work2, work3, work4, optim_mem,
+                                               pivotval, pivotidx, j, iipiv, m, gold1, gold2);
 
             // update remaining rows in outer panel
             rocsolver_trsm_upper<BATCHED, STRIDED, T>(
