@@ -495,7 +495,9 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
     I dimx, dimy, blocks, blocksy;
     dim3 grid, threads;
     size_t lmemsize;
-    printf("panelLU function on the host: sub-dividing panel in sub-panels of %d columns...\n", blk);
+    if constexpr(std::is_same<I, rocblas_int>::value)
+        printf("panelLU function on the host: sub-dividing panel in sub-panels of %d columns...\n",
+               blk);
 
     // Main loop
     for(I k = 0; k < nn; k += blk)
@@ -508,7 +510,7 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
                                                batch_count, scalars, pivotval, pivotidx, pivot,
                                                offset + k, permut_idx, stridePI);
 
-        if constexpr(std::is_same<T, float>::value)
+        if constexpr(std::is_same<I, rocblas_int>::value && std::is_same<T, float>::value)
         {
             if(k > 0)
             {
@@ -718,7 +720,8 @@ rocblas_status rocsolver_getrf_template(rocblas_handle handle,
 
     // size of outer blocks
     I blk = getrf_get_blksize<ISBATCHED, T>(dim, pivot);
-    printf("GETRF function on the host: matrix will be divided in blocks of size %d...\n", blk);
+    if constexpr(std::is_same<I, rocblas_int>::value)
+        printf("GETRF function on the host: matrix will be divided in blocks of size %d...\n", blk);
 
     std::vector<float> gold1(70 * 70 * 3);
     std::vector<float> gold2(70 * 70 * 3);
