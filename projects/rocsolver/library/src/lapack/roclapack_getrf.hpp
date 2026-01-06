@@ -540,8 +540,8 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
                         }
                     }
                 }
-                // if(found)
-                //     return rocblas_status_internal_error;
+                if(found)
+                    return rocblas_status_internal_error;
             }
         }
 
