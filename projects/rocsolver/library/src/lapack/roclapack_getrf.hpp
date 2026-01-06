@@ -513,8 +513,7 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
             if(k > 0)
             {
                 rocsolver_hybrid_storage<float, rocblas_int, U> result;
-                ROCBLAS_CHECK(
-                    result.init_async(mm * nn * lda, A, shiftA, strideA, batch_count, stream));
+                ROCBLAS_CHECK(result.init_async(lda * nn, A, 0, strideA, batch_count, stream));
                 HIP_CHECK(hipStreamSynchronize(stream));
 
                 bool found = false;
@@ -524,23 +523,25 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
                     float* hA = result[nb];
                     float* hG
                         = (k == blk ? gold1.data() + 70 * 70 * nb : gold2.data() + 70 * 70 * nb);
-                    for(int i = 0; i < mm; i++)
+                    for(int j = 0; j < nn; j++)
                     {
-                        for(int j = 0; j < nn; j++)
+                        for(int i = 0; i < mm; i++)
                         {
                             float rel_error
-                                = std::abs(hA[i + j * 70] - hG[i + j * 70] / hG[i + j * 70]);
+                                = std::abs((hA[i + j * lda] - hG[i + j * 70]) / hG[i + j * 70]);
                             if(rel_error >= tol)
                             {
                                 printf(
                                     "Data mismatch at %d,%d for batch %d: Expected: %f, Actual: %f "
                                     "(check thread at x=%d, y=%d)\n",
-                                    k + i, k + j, nb, hG[i + j * 70], hA[i + j * 70], i, nb);
+                                    k + i, k + j, nb, hG[i + j * 70], hA[i + j * lda], i, nb);
                                 found = true;
                             }
                         }
                     }
                 }
+                // if(found)
+                //     return rocblas_status_internal_error;
             }
         }
 
@@ -721,15 +722,15 @@ rocblas_status rocsolver_getrf_template(rocblas_handle handle,
 
     std::vector<float> gold1(70 * 70 * 3);
     std::vector<float> gold2(70 * 70 * 3);
-    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24_0", 70, 70, gold1.data(), 70);
-    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24_1", 70, 70,
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24__0", 70, 70, gold1.data(), 70);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24__1", 70, 70,
                 gold1.data() + 70 * 70, 70);
-    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24_2", 70, 70,
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k24__2", 70, 70,
                 gold1.data() + 70 * 70 * 2, 70);
-    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48_0", 70, 70, gold2.data(), 70);
-    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48_1", 70, 70,
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48__0", 70, 70, gold2.data(), 70);
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48__1", 70, 70,
                 gold2.data() + 70 * 70, 70);
-    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48_2", 70, 70,
+    read_matrix(get_sparse_data_dir().string() + "/gold-GETF2-k48__2", 70, 70,
                 gold2.data() + 70 * 70 * 2, 70);
 
     if(blk == 0)
