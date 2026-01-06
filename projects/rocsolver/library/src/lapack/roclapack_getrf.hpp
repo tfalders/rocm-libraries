@@ -536,7 +536,7 @@ rocblas_status getrf_panelLU(rocblas_handle handle,
                                 printf(
                                     "Data mismatch at %d,%d for batch %d: Expected: %f, Actual: %f "
                                     "(check thread at x=%d, y=%d)\n",
-                                    k + i, k + j, nb, hG[i + j * 70], hA[i + j * lda], i, nb);
+                                    i, j, nb, hG[i + j * 70], hA[i + j * lda], i - k, nb);
                                 found = true;
                             }
                         }
