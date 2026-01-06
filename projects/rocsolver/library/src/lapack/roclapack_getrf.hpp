@@ -770,18 +770,18 @@ rocblas_status rocsolver_getrf_template(rocblas_handle handle,
         if(pivot || panel)
         {
             // factorize outer block panel
-            getrf_panelLU<BATCHED, STRIDED, T>(handle, m - j, jb, n, A, shiftA + j * inca, inca, lda,
-                                               strideA, ipiv, shiftP + j, strideP, info, batch_count,
-                                               pivot, scalars, work1, work2, work3, work4, optim_mem,
-                                               pivotval, pivotidx, j, iipiv, m, gold1, gold2);
+            ROCBLAS_CHECK(getrf_panelLU<BATCHED, STRIDED, T>(
+                handle, m - j, jb, n, A, shiftA + j * inca, inca, lda, strideA, ipiv, shiftP + j,
+                strideP, info, batch_count, pivot, scalars, work1, work2, work3, work4, optim_mem,
+                pivotval, pivotidx, j, iipiv, m, gold1, gold2));
         }
         else
         {
             // factorize only outer diagonal block
-            getrf_panelLU<BATCHED, STRIDED, T>(handle, jb, jb, n, A, shiftA + j * inca, inca, lda,
-                                               strideA, ipiv, shiftP + j, strideP, info, batch_count,
-                                               pivot, scalars, work1, work2, work3, work4, optim_mem,
-                                               pivotval, pivotidx, j, iipiv, m, gold1, gold2);
+            ROCBLAS_CHECK(getrf_panelLU<BATCHED, STRIDED, T>(
+                handle, jb, jb, n, A, shiftA + j * inca, inca, lda, strideA, ipiv, shiftP + j,
+                strideP, info, batch_count, pivot, scalars, work1, work2, work3, work4, optim_mem,
+                pivotval, pivotidx, j, iipiv, m, gold1, gold2));
 
             // update remaining rows in outer panel
             rocsolver_trsm_upper<BATCHED, STRIDED, T>(
