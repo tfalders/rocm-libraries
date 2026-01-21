@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,8 +31,6 @@
 #include "rocsolver/rocsolver.h"
 
 ROCSOLVER_BEGIN_NAMESPACE
-
-const hipDeviceProp_t* rocblas_internal_get_device_prop(rocblas_handle handle);
 
 struct rocsolver_handle_data_
 {

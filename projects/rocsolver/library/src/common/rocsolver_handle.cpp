@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,16 +31,6 @@
 #include <memory>
 
 ROCSOLVER_BEGIN_NAMESPACE
-
-static hipDeviceProp_t static_props;
-const hipDeviceProp_t* rocblas_internal_get_device_prop(rocblas_handle handle)
-{
-    int device;
-    auto stat = hipGetDevice(&device);
-    stat = hipGetDeviceProperties(&static_props, device);
-
-    return &static_props;
-}
 
 rocblas_status rocsolver_set_alg_mode_impl(rocblas_handle handle,
                                            const rocsolver_function func,
