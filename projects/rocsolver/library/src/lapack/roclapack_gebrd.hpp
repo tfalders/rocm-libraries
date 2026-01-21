@@ -60,18 +60,18 @@ void rocsolver_gebrd_getMemorySize(const rocblas_int m,
     else
     {
         work_helper->set_nested_capacity(2);
-        rocblas_int k = GEBRD_GEBD2_SWITCHSIZE;
-        rocblas_int d = (std::min(m, n) - 1) / k + 1;
+        rocblas_int nb = GEBRD_BLOCKSIZE;
+        rocblas_int diff = std::min(m, n) - GEBRD_GEBD2_SWITCHSIZE;
 
-        rocsolver_gebd2_getMemorySize<BATCHED, T>(m - d * k, n - d * k, batch_count,
+        rocsolver_gebd2_getMemorySize<BATCHED, T>(m - diff, n - diff, batch_count,
                                                   work_helper->add_nested());
-        rocsolver_labrd_getMemorySize<BATCHED, T>(m, n, k, batch_count, work_helper->add_nested());
+        rocsolver_labrd_getMemorySize<BATCHED, T>(m, n, nb, batch_count, work_helper->add_nested());
 
         // size of matrix X
-        size_t size_X = m * k * sizeof(T) * batch_count;
+        size_t size_X = m * nb * sizeof(T) * batch_count;
 
         // size of matrix Y
-        size_t size_Y = n * k * sizeof(T) * batch_count;
+        size_t size_Y = n * nb * sizeof(T) * batch_count;
 
         // size of array of pointers (batched cases)
         size_t size_workArr = 0;
@@ -138,7 +138,7 @@ rocblas_status rocsolver_gebrd_template(rocblas_handle handle,
 
     rocblas_stride shiftX = 0, shiftY = 0;
     rocblas_int ldx = m, ldy = n;
-    rocblas_stride strideX = m * GEBRD_GEBD2_SWITCHSIZE, strideY = n * GEBRD_GEBD2_SWITCHSIZE;
+    rocblas_stride strideX = m * nb, strideY = n * nb;
 
     while(j < dim - k)
     {

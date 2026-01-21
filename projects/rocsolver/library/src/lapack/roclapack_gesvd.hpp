@@ -444,8 +444,8 @@ rocblas_status rocsolver_gesvd_template(rocblas_handle handle,
     const rocblas_int shiftV = 0;
     const rocblas_int ldx = thinSVD ? k : m;
     const rocblas_int ldy = thinSVD ? k : n;
-    const rocblas_stride strideX = ldx * GEBRD_GEBD2_SWITCHSIZE;
-    const rocblas_stride strideY = ldy * GEBRD_GEBD2_SWITCHSIZE;
+    const rocblas_stride strideX = ldx * GEBRD_BLOCKSIZE;
+    const rocblas_stride strideY = ldy * GEBRD_BLOCKSIZE;
     T* bufferT = tempArrayT;
     rocblas_int ldt = k;
     rocblas_stride strideT = k * k;
