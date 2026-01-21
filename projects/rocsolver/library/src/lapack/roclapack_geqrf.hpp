@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     November 2019
- * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -200,13 +200,12 @@ void rocsolver_geqrf_getMemorySize(const I m,
         rocsolver_geqr2_getMemorySize<BATCHED, T>(m, jb, batch_count, work_helper->add_nested());
 
         // requirements for calling LARFT
-        rocsolver_larft_getMemorySize<BATCHED, T>(m, jb, batch_count, work_helper->add_nested(),
-                                                  true);
+        rocsolver_larft_getMemorySize<BATCHED, T>(m, jb, batch_count, work_helper->add_nested());
 
         // requirements for calling LARFB
         rocsolver_larfb_getMemorySize<BATCHED, T>(rocblas_side_left,
                                                   rocblas_operation_conjugate_transpose, m, n - jb,
-                                                  jb, batch_count, work_helper->add_nested(), true);
+                                                  jb, batch_count, work_helper->add_nested());
 
         // size to store the temporary triangular factor
         size_t size_trfact = sizeof(T) * jb * jb * batch_count;
@@ -270,16 +269,15 @@ rocblas_status rocsolver_geqrf_template(rocblas_handle handle,
         if(j + jb < n)
         {
             // compute block reflector
-            rocsolver_larft_template<T>(handle, rocblas_forward_direction, rocblas_column_wise,
-                                        m - j, jb, A, shiftA + idx2D(j, j, lda), lda, strideA,
-                                        (ipiv + j), strideP, trfact, ldw, strideW, batch_count,
-                                        larft_work, true);
+            rocsolver_larft_template<T>(handle, rocblas_forward_direction, rocblas_column_wise, m - j,
+                                        jb, A, shiftA + idx2D(j, j, lda), lda, strideA, (ipiv + j),
+                                        strideP, trfact, ldw, strideW, batch_count, larft_work);
 
             rocsolver_larfb_template<BATCHED, T>(
                 handle, rocblas_side_left, rocblas_operation_conjugate_transpose,
                 rocblas_forward_direction, rocblas_column_wise, m - j, n - j - jb, jb, A,
                 shiftA + idx2D(j, j, lda), lda, strideA, trfact, 0, ldw, strideW, A,
-                shiftA + idx2D(j, j + jb, lda), lda, strideA, batch_count, larfb_work, true);
+                shiftA + idx2D(j, j + jb, lda), lda, strideA, batch_count, larfb_work);
         }
         j += nb;
     }
