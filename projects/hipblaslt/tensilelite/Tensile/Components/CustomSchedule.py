@@ -66,8 +66,8 @@ def customMainLoopSchedule(writer, kernel, tensorParametersA, tensorParametersB,
 
     globalReadIncACode = removeComments(globalReadIncACode)
     globalReadIncBCode = removeComments(globalReadIncBCode)
-
     numLoopIter = kernel["LoopIters"]
+    ph = -2 # placeholder index
 
     if numLoopIter > 1:
         for uIdx in range(0, numLoopIter):
@@ -162,10 +162,10 @@ def customMainLoopSchedule(writer, kernel, tensorParametersA, tensorParametersB,
 
     lastIter = numLoopIter - 1
 
-    miIndex = 0
-    for mi in mfmaCode:
-        module.addComment0("mfmaIndex:%u"%(miIndex))
-        module.add(mi)
+    for miIndex in range(-1, len(mfmaCode)):
+        if miIndex >= 0:
+            module.addComment0("mfmaIndex:%u"%(miIndex))
+            module.add(mfmaCode[miIndex])
 
         def scheduleInst(indexList, instructionList):
             ret = [None]*len(indexList)
@@ -180,7 +180,7 @@ def customMainLoopSchedule(writer, kernel, tensorParametersA, tensorParametersB,
                             ret[i] = Module()
                         ret[i].add(instructionList[ind])
                         cc += 1
-                        indexList[i][ind] = -1
+                        indexList[i][ind] = ph
             if ret.count(None) == len(ret):
                 return [None]
             else:
@@ -217,9 +217,9 @@ def customMainLoopSchedule(writer, kernel, tensorParametersA, tensorParametersB,
         if needIfMacro:
             for codepath in range(numCodePath):
                 if codepath == 0:
-                    module.add(TextBlock(".if     \ID == %u\n"%codepath))
+                    module.add(TextBlock(".if     \\ID == %u\n"%codepath))
                 else:
-                    module.add(TextBlock(".elseif \ID == %u\n"%codepath))
+                    module.add(TextBlock(".elseif \\ID == %u\n"%codepath))
 
                 def scheduleInst2(instList, macroGuard=""):
                     if len(instList) == numCodePath:
@@ -244,7 +244,6 @@ def customMainLoopSchedule(writer, kernel, tensorParametersA, tensorParametersB,
 
                 if codepath == numCodePath - 1:
                     module.add(TextBlock(".endif\n"))
-        miIndex += 1
 
     module.add(TextBlock(".endm\n"))
     return module, numCodePath
@@ -270,6 +269,7 @@ def hasCustomSchedule(kernel):
     MI = kernel["MatrixInstruction"]
     MIWG = kernel["MIWaveGroup"]
     useLDSTr = kernel["LDSTrInst"]
+    TLDS = kernel["TransposeLDS"]
 
     is256x256x64DTL  = [MT0, MT1, DU, PGR, PLR, DTL] == [256, 256, 64, 2, 1, True]
     is192x256x64DTL  = [MT0, MT1, DU, PGR, PLR, DTL] == [192, 256, 64, 2, 1, True]
@@ -292,7 +292,7 @@ def hasCustomSchedule(kernel):
         optSchedule = dict()
         syncCode = []
 
-        if isTN:
+        if isTN and TLDS == 1:
             optSchedule = {
                 'SYNC'   : [[19,20, 50,51, 67,68, 104, 105]],
                 'GRIncA' : [[0,1,2,3,4,5,6,7,8]],
@@ -323,7 +323,7 @@ def hasCustomSchedule(kernel):
                         SBarrier(comment=""),
                         SWaitCnt(dscnt=-1, vlcnt=15, vscnt=-1, comment="Wait for previous GRA to completely"),
                         SBarrier(comment="")]
-        elif isNT and not useLDSTr:
+        elif isNT and not useLDSTr and TLDS == 0:
             kernel["UsePLRPack"] = True
 
             optSchedule = {
@@ -366,7 +366,7 @@ def hasCustomSchedule(kernel):
                         SBarrier(comment=""),
                         SWaitCnt(dscnt=4, vlcnt=-1, vscnt=-1, comment="Wait for LRA1 to complete"),
                         SWaitCnt(dscnt=0, vlcnt=-1, vscnt=-1, comment="Wait for LRB1 to complete")]
-        elif (isNN or isTT) and not useLDSTr:
+        elif (isNN or isTT) and not useLDSTr and TLDS == 1:
             kernel["UsePLRPack"] = True
 
             optSchedule = {
@@ -427,22 +427,24 @@ def hasCustomSchedule(kernel):
         optSchedule = dict()
         syncCode = []
 
-        if isTN:
+        plr = 3 if kernel["ForceUnrollSubIter"] else 1
+
+        if isTN and TLDS == 1:
             optSchedule = {
-                'SYNC'   : [[6,7, 20,21, 46,47, 61]],
-                'GRIncA' : [[0,1,2,3,4,4,4,4,4]],
-                'GRIncB' : [[5,5,5,5,5,6,6,6,6]],
-                'LRA0'   : [[0,0, 1,1, 2,2, 3,3]],
-                'GRA'    : [[8,8,9,9,10,10,11,11,12,12, 23,23,24,24,25,25]],
-                'LRB0'   : [[13,13,14,14,15,15,16,16]],
-                'LRA1'   : [[48,48,49,49,50,50,51,51]],
-                'LRB1'   : [[52,52,54,54,55,55,56,56]],
-                'GRB'    : [[26,26,27,27, 39,39,40,40,41,41,42,42,43,43, 53,53]],
-                'LCC'    : [[60, 60]],
-                'LRSA'   : [[17]],
-                'LRSB'   : [[17]],
-                'LWSA'   : [[57]],
-                'LWSB'   : [[57]],
+                'SYNC'      : [[6,7, 20,21, 46,47, 61]],
+                'GRIncA'    : [[0,1,2,3,4,4,4,4,4]],
+                'GRIncB'    : [[5,5,5,5,5,6,6,6,6]],
+                'LRA0'      : [[0,0, 1,1, 2,2, 3,3]],
+                'GRA'       : [[8,8,9,9,10,10,11,11,12,12, 23,23,24,24,25,25]],
+                'LRB0'      : [[13,13,14,14,15,15,16,16]],
+                'LRA%u'%plr : [[48,48,49,49,50,50,51,51]],
+                'LRB%u'%plr : [[52,52,54,54,55,55,56,56]],
+                'GRB'       : [[26,26,27,27, 39,39,40,40,41,41,42,42,43,43, 53,53]],
+                'LCC'       : [[60, 60]],
+                'LRSA'      : [[17]],
+                'LRSB'      : [[17]],
+                'LWSA'      : [[57]],
+                'LWSB'      : [[57]],
             }
             syncCode = [SWaitCnt(dscnt=0, vlcnt=-1, vscnt=-1, comment="Wait for LRA0/LRB0 to complete"),
                         SBarrier(comment=""),
@@ -456,10 +458,12 @@ def hasCustomSchedule(kernel):
 
         numMfma = 64
         # B0A0, B0A1, B1A0, B1A1
-        mfmaReorder = [0,1,2,3, 8,9,10,11, 16,17,18,19, 24,25,26,27,
-                       4,5,6,7, 12,13,14,15, 20,21,22,23, 28,29,30,31,
-                       32,33,34,35, 40,41,42,43, 48,49,50,51, 56,57,58,59,
-                       36,37,38,39, 44,45,46,47, 52,53,54,55, 60,61,62,63]
+        mfmaReorder = []
+        if not kernel["ForceUnrollSubIter"]:
+            mfmaReorder = [0,1,2,3, 8,9,10,11, 16,17,18,19, 24,25,26,27,
+                           4,5,6,7, 12,13,14,15, 20,21,22,23, 28,29,30,31,
+                           32,33,34,35, 40,41,42,43, 48,49,50,51, 56,57,58,59,
+                           36,37,38,39, 44,45,46,47, 52,53,54,55, 60,61,62,63]
         opt1 = ScheduleInfo(1, numMfma, optSchedule, syncCode, mfmaReorder)
         return True, opt1
     elif is192x256x64DTL and is16bit and not isMixed and ([GRVWA, GRVWB, LRVW] == [8, 8, 8]) and MI == [16,16,32,1] and MIWG == [2,2]:
@@ -468,7 +472,7 @@ def hasCustomSchedule(kernel):
 
         optSchedule = dict()
         syncCode = []
-        if isNN and useLDSTr:
+        if isNN and useLDSTr and TLDS==1:
             # Note: A/B Global read orders are swapped
             # i.e. GRA contains GR for B
             optSchedule = {
