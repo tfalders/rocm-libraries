@@ -483,8 +483,8 @@ case "${ID}" in
   ;;
 esac
 
-export CXX="${rocm_path}/bin/amdclang++"
-export CC="${rocm_path}/bin/amdclang"
+export CXX="${rocm_path}/bin/hipcc"
+export CC="${rocm_path}/bin/hipcc"
 export FC="gfortran"
 export PATH="${rocm_path}/bin:${rocm_path}/hip/bin:${rocm_path}/llvm/bin:${PATH}"
 
