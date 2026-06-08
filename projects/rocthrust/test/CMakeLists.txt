@@ -98,6 +98,10 @@ function(add_rocthrust_test TEST)
         PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test/"
     )
+
+    # Track test target globally for category labels
+    set_property(GLOBAL APPEND PROPERTY ROCTHRUST_TEST_TARGETS ${TEST_TARGET})
+
     if(AMDGPU_TEST_TARGETS)
         foreach(AMDGPU_TARGET IN LISTS AMDGPU_TEST_TARGETS)
             add_test("${AMDGPU_TARGET}-${TEST_TARGET}" ${TEST_TARGET})
@@ -242,7 +246,10 @@ if(BUILD_TEST)
     add_rocthrust_test("reduce_by_key")
     add_rocthrust_test("reduce_large")
     add_rocthrust_test("remove")
-    add_rocthrust_test("replace")
+    # Temporarily disable this test for gfx950 when CODE_COVERAGE is ON due to a compiler issue
+    if((NOT CODE_COVERAGE) OR (NOT (("gfx950" IN_LIST GPU_TARGETS) OR (GPU_TARGETS STREQUAL "all"))))
+        add_rocthrust_test("replace")
+    endif()
     add_rocthrust_test("reproducibility")
     add_rocthrust_test("reverse")
     add_rocthrust_test("reverse_iterator")
@@ -340,6 +347,30 @@ if(BUILD_HIPSTDPAR_TEST)
     endif()
 endif()
 
+# ****************************************************************************
+# Test Filter Standardization
+# ****************************************************************************
+
+if(EXISTS "${ROCM_LIBRARIES_ROOT}/shared/ctest/TestCategories.cmake")
+    include("${ROCM_LIBRARIES_ROOT}/shared/ctest/TestCategories.cmake")
+
+    message(STATUS "Applying test categories for rocthrust")
+    get_property(_rt_test_targets GLOBAL PROPERTY ROCTHRUST_TEST_TARGETS)
+    foreach(_rt_t IN LISTS _rt_test_targets)
+        get_target_property(_rt_dir ${_rt_t} RUNTIME_OUTPUT_DIRECTORY)
+        apply_test_category_labels(${_rt_t}
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_categories.yaml"
+            "${_rt_dir}" "${INSTALL_TEST_FILE}")
+    endforeach()
+else()
+    message(
+        STATUS
+        "Shared CTest categories not found at "
+        "${ROCM_LIBRARIES_ROOT}/shared/ctest/TestCategories.cmake - "
+        "skipping rocthrust test category labels"
+    )
+endif()
+
 rocm_install(
     FILES "${INSTALL_TEST_FILE}"
     DESTINATION "${CMAKE_INSTALL_BINDIR}/${PROJECT_NAME}"
@@ -352,10 +383,12 @@ add_executable(generate_resource_spec ${CMAKE_SOURCE_DIR}/test/generate_resource
 set_target_properties(generate_resource_spec PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_link_libraries(generate_resource_spec PRIVATE hip::host)
 
-# Install the executable as PROGRAMS (rather than TARGETS)
-# since we want to put it in the correct DESTINATION.
-rocm_install(
-    PROGRAMS $<TARGET_FILE:generate_resource_spec>
+# Install the executable using the standard install command instead of rocm_install
+# since we want to put it in a custom DESTINATION (rocm_install does not support
+# the DESTINATION option for TARGETS).
+set_property(TARGET generate_resource_spec APPEND PROPERTY INSTALL_RPATH "$ORIGIN/../../lib")
+install(
+    TARGETS generate_resource_spec
     DESTINATION "${CMAKE_INSTALL_BINDIR}/${PROJECT_NAME}"
     COMPONENT tests
 )

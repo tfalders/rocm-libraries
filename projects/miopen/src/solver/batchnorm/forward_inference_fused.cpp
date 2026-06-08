@@ -76,7 +76,7 @@ ConvSolution BnFwdInferActivationFused::GetSolution(const FusionContext&,
     auto result = ConvSolution{miopenStatusSuccess};
     auto kernel = KernelInfo{};
 
-    kernel.kernel_file = "MIOpenBatchNormActivInferHIP.cpp";
+    kernel.kernel_file = "MIOpenBatchNormActivInfer.cpp";
     kernel.kernel_name = "MIOpenBatchNormActivInfer";
     const auto mode    = bn_problem.GetMode();
     if(mode == miopenBNSpatial)
@@ -92,7 +92,7 @@ ConvSolution BnFwdInferActivationFused::GetSolution(const FusionContext&,
     const auto& input_desc = bn_problem.GetXDesc();
     std::tie(n, c, h, w)   = tien<4>(input_desc.GetLengths());
 
-    bool is_layout_NHWC  = (input_desc.GetLayout_t() == miopenTensorNHWC);
+    const bool is_layout_NHWC = (input_desc.GetLayoutEnum() == miopenTensorNHWC);
     size_t read_len      = (mode == miopenBNSpatial) ? (is_layout_NHWC ? c : h * w) : c * h * w;
     size_t read_unit     = (read_len % 4 == 0) ? 4 : (read_len % 2 == 0) ? 2 : 1;
     size_t max_localsize = 256;

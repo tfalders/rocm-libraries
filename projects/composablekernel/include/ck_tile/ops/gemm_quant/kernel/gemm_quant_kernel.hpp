@@ -14,6 +14,10 @@
 #include "ck_tile/host/concat.hpp"
 #include "ck_tile/ops/gemm_quant/pipeline/tile_gemm_quant_traits.hpp"
 
+#if __clang_major__ >= 23
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wlifetime-safety-intra-tu-suggestions"
+#endif
 namespace ck_tile {
 
 namespace detail {
@@ -176,7 +180,8 @@ struct QuantGemmHostArgs : public QuantGemmProblem
     const void* aq_ptr = nullptr;
     const void* bq_ptr = nullptr;
     void* c_ptr        = nullptr;
-    index_t k_batch    = 0;
+    // k_batch must be a positive integer; defaults to 1 (no split-K).
+    index_t k_batch = 1;
 };
 
 struct QuantGemmKernelArgs
@@ -199,10 +204,35 @@ struct QuantGemmKernelArgs
     index_t k_batch;
 };
 
+CK_TILE_HOST_DEVICE auto
+get_splitk_batch_k_read(index_t K, index_t k_batch, index_t k_unit) noexcept -> index_t
+{
+    // k_batch and k_unit must be positive integers.  Callers are expected to
+    // validate via IsSupportedArgument(); this fallback returns K so a
+    // misconfigured launch behaves as a no-split kernel.
+    if(k_batch <= 0 || k_unit <= 0)
+    {
+        return K;
+    }
+    const index_t k_t = k_batch * k_unit;
+    return (K + k_t - 1) / k_t * k_unit;
+}
+
+CK_TILE_HOST_DEVICE auto
+get_splitk_last_batch_k(index_t K, index_t k_batch, index_t k_read) noexcept -> index_t
+{
+    if(k_batch <= 0)
+    {
+        return K;
+    }
+    return K - k_read * (k_batch - 1);
+}
+
 template <typename TilePartitioner_,
           typename GemmPipeline_,
           typename EpiloguePipeline_,
-          QuantType QuantType_>
+          QuantType QuantType_,
+          bool RuntimeSplitKTail_ = false>
 struct QuantGemmKernel
 {
     using TilePartitioner  = remove_cvref_t<TilePartitioner_>;
@@ -240,12 +270,13 @@ struct QuantGemmKernel
     static constexpr auto I3 = number<3>(); // BQ Tensor
     static constexpr auto I4 = number<4>(); // C Tensor
 
-    static constexpr auto kQuantType = QuantType_;
+    static constexpr auto kQuantType        = QuantType_;
+    static constexpr bool RuntimeSplitKTail = RuntimeSplitKTail_;
 
     [[nodiscard]] CK_TILE_HOST static const std::string GetName()
     {
         // clang-format off
-        return concat('_', "gemm_quant", gemm_prec_str<ADataType, BDataType>, GemmPipeline::GetName());
+        return concat('_', "gemm_quant", gemm_prec_str<ADataType, BDataType>(), GemmPipeline::GetName());
         // clang-format on
     }
 
@@ -382,11 +413,9 @@ struct QuantGemmKernel
         {
             constexpr auto K1 =
                 GemmPipeline::BlockGemmShape::WarpTile::at(I2); // smallest unit of K work per block
-            const index_t K_t = amd_wave_read_first_lane(
-                kargs.k_batch * K1); // amount of K elements consumed if every split-K batch
-                                     // performs exactly one "unit" (K1)
-            const index_t KRead = amd_wave_read_first_lane(
-                (kargs.K + K_t - 1) / K_t * K1); // total k elements to be read in this batch
+            const index_t KRead =
+                amd_wave_read_first_lane(get_splitk_batch_k_read(kargs.K, kargs.k_batch, K1));
+            // total k elements to be read in this batch
             // offset not necessarily = KRead, because B can have packed elements (e.g. fp8i4)
             constexpr index_t BPackedSize =
                 ck_tile::numeric_traits<remove_cvref_t<BDataType>>::PackedSize;
@@ -408,7 +437,21 @@ struct QuantGemmKernel
             }
             else if constexpr(std::is_same_v<tensor_layout::gemm::ColumnMajor, BLayout>)
             {
-                b_k_split_offset = amd_wave_read_first_lane(b_k_offset_elements);
+                if constexpr(PreshuffleB)
+                {
+                    // Preshuffled B is laid out as [N/N_Warp_Tile, K_outer, N_Warp_Tile, K_inner]
+                    // (see shuffle_b<>), where each "N_outer" row spans N_Warp_Tile * full_K
+                    // linear elements.  MakeBBlockWindow already builds the descriptor with
+                    // stride [N_Warp_Tile * kargs.K, 1], so to advance the K starting position
+                    // by k_id * KRead within row 0 we need to advance the pointer by
+                    // (k_id * KRead) * N_Warp_Tile -- not just (k_id * KRead).
+                    constexpr index_t N_Warp_Tile = GemmPipeline::BlockGemmShape::WarpTile::at(I1);
+                    b_k_split_offset = amd_wave_read_first_lane(b_k_offset_elements * N_Warp_Tile);
+                }
+                else
+                {
+                    b_k_split_offset = amd_wave_read_first_lane(b_k_offset_elements);
+                }
             }
 
             if(k_id < static_cast<uint32_t>(kargs.k_batch - 1))
@@ -448,18 +491,54 @@ struct QuantGemmKernel
                     // offset = bq_group_offset
                     bq_k_split_offset = amd_wave_read_first_lane(bq_group_offset);
                 }
+
+                aq_group_offset   = 0;
+                aq_k_split_offset = 0;
+            }
+            else if constexpr(kQuantType == QuantType::ABQuantGrouped && !APreshuffleQuant)
+            {
+                using AQuantGroupSize = remove_cvref_t<typename GemmPipeline::AQuantGroupSize>;
+                using BQuantGroupSize = remove_cvref_t<typename GemmPipeline::BQuantGroupSize>;
+
+                // Compute AQ K-group offset for this split-K batch.
+                const index_t k_offset_aq = amd_wave_read_first_lane(k_id * KRead);
+                aq_group_offset = amd_wave_read_first_lane(k_offset_aq / AQuantGroupSize::kK);
+                if constexpr(std::is_same_v<AQLayout, tensor_layout::gemm::RowMajor>)
+                {
+                    // RowMajor AQ is [M, QK_A] with stride [stride_AQ, 1].
+                    // Advancing to K-group column g is a pointer offset of g.
+                    aq_k_split_offset = amd_wave_read_first_lane(aq_group_offset);
+                }
+                else if constexpr(std::is_same_v<AQLayout, tensor_layout::gemm::ColumnMajor>)
+                {
+                    // ColumnMajor AQ is [QK_A, M] with K-group row stride stride_AQ.
+                    // Advancing to K-group row g is a pointer offset of g * stride_AQ.
+                    aq_k_split_offset = amd_wave_read_first_lane(aq_group_offset * kargs.stride_AQ);
+                }
+
+                // Compute BQ K-group offset for this split-K batch.
+                // BQ tensor layout is ColumnMajor [N/kN, K/kK] with stride [K/kK, 1] for
+                // ABQuantGrouped. Advancing to column bq_group_offset means a pointer offset of
+                // bq_group_offset elements (column stride = 1).
+                const index_t k_offset_bq = amd_wave_read_first_lane(k_id * KRead);
+                bq_group_offset   = amd_wave_read_first_lane(k_offset_bq / BQuantGroupSize::kK);
+                bq_k_split_offset = amd_wave_read_first_lane(bq_group_offset);
             }
             else
             {
                 bq_group_offset   = 0;
                 bq_k_split_offset = 0;
+                aq_group_offset   = 0;
+                aq_k_split_offset = 0;
             }
         }
 
         index_t a_k_split_offset;
         index_t b_k_split_offset;
-        index_t bq_group_offset;   // Logical offset in K-groups (K/kK dimension)
-        index_t bq_k_split_offset; // Memory pointer offset (accounting for layout/stride)
+        index_t aq_group_offset;   // Logical offset in K-groups for AQ (K/kK dimension)
+        index_t aq_k_split_offset; // Memory pointer offset for AQ
+        index_t bq_group_offset;   // Logical offset in K-groups for BQ (K/kK dimension)
+        index_t bq_k_split_offset; // Memory pointer offset for BQ (accounting for layout/stride)
         index_t splitted_k;
     };
 
@@ -532,7 +611,8 @@ struct QuantGemmKernel
     CK_TILE_DEVICE static auto MakeAQBlockWindow(const AQDataType* aq_ptr,
                                                  const QuantGemmKernelArgs& kargs,
                                                  const index_t i_m,
-                                                 const index_t i_n)
+                                                 const index_t i_n,
+                                                 const index_t aq_group_offset = 0)
     {
         // Step 1: Create tensor view for AQ
         const auto& aq_tensor_view = [&]() {
@@ -615,11 +695,14 @@ struct QuantGemmKernel
             }
             else if constexpr(kQuantType == QuantType::ABQuantGrouped && !APreshuffleQuant)
             {
+                // For split-K, aq_ptr is already offset by aq_k_split_offset elements.
+                // The remaining K-groups from this offset position = QK_A - aq_group_offset.
+                const index_t remaining_qk_a = kargs.QK_A - aq_group_offset;
                 if constexpr(std::is_same_v<AQLayout, tensor_layout::gemm::RowMajor>)
                 {
                     return make_naive_tensor_view<address_space_enum::global>(
                         aq_ptr,
-                        make_tuple(kargs.M, kargs.QK_A),
+                        make_tuple(kargs.M, remaining_qk_a),
                         make_tuple(kargs.stride_AQ, 1),
                         number<GemmPipeline::GetVectorSizeAQ()>{},
                         number<1>{});
@@ -628,9 +711,8 @@ struct QuantGemmKernel
                 {
                     return make_naive_tensor_view<address_space_enum::global>(
                         aq_ptr,
-                        make_tuple(kargs.M, kargs.QK_A),
+                        make_tuple(kargs.M, remaining_qk_a),
                         make_tuple(1, kargs.stride_AQ),
-
                         number<GemmPipeline::GetVectorSizeAQ()>{},
                         number<1>{});
                 }
@@ -787,20 +869,12 @@ struct QuantGemmKernel
                     }
                     else
                     {
-                        if constexpr(std::is_same_v<BDataType, pk_fp4_raw_t>)
-                            return make_naive_tensor_view<address_space_enum::global>(
-                                b_ptr,
-                                make_tuple(kargs.N, k_size / 2),
-                                make_tuple(kargs.stride_B, 1),
-                                number<GemmPipeline::GetVectorSizeB()>{},
-                                number<1>{});
-                        else
-                            return make_naive_tensor_view<address_space_enum::global>(
-                                b_ptr,
-                                make_tuple(kargs.N, k_size),
-                                make_tuple(kargs.stride_B, 1),
-                                number<GemmPipeline::GetVectorSizeB()>{},
-                                number<1>{});
+                        return make_naive_tensor_view<address_space_enum::global>(
+                            b_ptr,
+                            make_tuple(kargs.N, k_size),
+                            make_tuple(kargs.stride_B, 1),
+                            number<GemmPipeline::GetVectorSizeB()>{},
+                            number<1>{});
                     }
                 }
             }
@@ -814,16 +888,10 @@ struct QuantGemmKernel
             }
             else if constexpr(std::is_same_v<BLayout, tensor_layout::gemm::ColumnMajor>)
             {
-                if constexpr(std::is_same_v<BDataType, pk_fp4_raw_t>)
-                    return pad_tensor_view(b_tensor_view,
-                                           make_tuple(number<TilePartitioner::NPerBlock>{},
-                                                      number<TilePartitioner::KPerBlock / 2>{}),
-                                           sequence<false, GemmPipeline::kPadK>{});
-                else
-                    return pad_tensor_view(b_tensor_view,
-                                           make_tuple(number<TilePartitioner::NPerBlock>{},
-                                                      number<TilePartitioner::KPerBlock>{}),
-                                           sequence<false, GemmPipeline::kPadK>{});
+                return pad_tensor_view(b_tensor_view,
+                                       make_tuple(number<TilePartitioner::NPerBlock>{},
+                                                  number<TilePartitioner::KPerBlock>{}),
+                                       sequence<false, GemmPipeline::kPadK>{});
             }
             else
             {
@@ -848,17 +916,10 @@ struct QuantGemmKernel
             {
                 if constexpr(std::is_same_v<BLayout, tensor_layout::gemm::ColumnMajor>)
                 {
-                    if constexpr(std::is_same_v<BDataType, pk_fp4_raw_t>)
-                        return make_tile_window(
-                            b_pad_view,
-                            make_tuple(number<TilePartitioner::NPerBlock>{},
-                                       number<TilePartitioner::KPerBlock / 2>{}),
-                            {i_n, 0});
-                    else
-                        return make_tile_window(b_pad_view,
-                                                make_tuple(number<TilePartitioner::NPerBlock>{},
-                                                           number<TilePartitioner::KPerBlock>{}),
-                                                {i_n, 0});
+                    return make_tile_window(b_pad_view,
+                                            make_tuple(number<TilePartitioner::NPerBlock>{},
+                                                       number<TilePartitioner::KPerBlock>{}),
+                                            {i_n, 0});
                 }
                 else
                 {
@@ -985,7 +1046,7 @@ struct QuantGemmKernel
                     // Number of K-dimension quantization groups per block
                     constexpr auto bqk_per_block = TilePartitioner::KPerBlock / BQuantGroupSize::kK;
 
-                    // The pre-shuffled layout flattens warp_n ×
+                    // The pre-shuffled layout flattens warp_n x
                     // bqk_per_block scales per row, Padded up to warp_size
                     // to ensure coalesced memory access.
                     constexpr auto tile_window_width =
@@ -993,7 +1054,7 @@ struct QuantGemmKernel
 
                     // Adapts based on fine vs coarse quantization granularity:
                     //   - Fine-grained (BQuantGroupSize::kN < warp_n):
-                    //       Multiple quant groups per warp → fewer rows needed per block.
+                    //       Multiple quant groups per warp -> fewer rows needed per block.
                     //       height = block_n / warp_per_group
                     //
                     //   - Coarse-grained (BQuantGroupSize::kN >= warp_n):
@@ -1121,28 +1182,72 @@ struct QuantGemmKernel
 
     CK_TILE_HOST static bool IsSupportedArgument(const QuantGemmKernelArgs& kargs)
     {
-        // Split-K is supported for BQuantGrouped mode without preshuffle
+        // k_batch must be a positive integer.
+        if(kargs.k_batch <= 0)
+        {
+            if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+            {
+                CK_TILE_ERROR("k_batch must be a positive integer (got " +
+                              std::to_string(kargs.k_batch) + ")!");
+            }
+            return false;
+        }
+
+        // The split-K K-unit (warp-tile K dimension) must be positive too;
+        // it is a compile-time constant taken from the pipeline shape.
+        static_assert(GemmPipeline::BlockGemmShape::WarpTile::at(I2) > 0,
+                      "Pipeline warp-tile K dimension (k_unit) must be positive.");
+
+        // ABQuantGrouped does not currently support RowMajor BQ layout: the
+        // BQ tensor view, tile window, and split-K offset code are all
+        // written for ColumnMajor BQ.  The deeper static_asserts in
+        // MakeBQBlockWindow enforce this at instantiation time; surface it
+        // here at the host-arg entry point too so the limitation is visible
+        // before the first device-side instantiation.
+        static_assert(!(kQuantType == QuantType::ABQuantGrouped &&
+                        std::is_same_v<BQLayout, tensor_layout::gemm::RowMajor>),
+                      "ABQuantGrouped does not currently support RowMajor BQ layout. "
+                      "Use ColumnMajor BQ (or extend MakeBQBlockWindow and the split-K "
+                      "BQ offset path to handle RowMajor BQ).");
+
+        // Split-K is supported for BQuantGrouped (without preshuffle) and
+        // ABQuantGrouped (without APreshuffleQuant) modes.
         if(kargs.k_batch != 1)
         {
             constexpr bool is_bquant_non_preshuffle =
                 (kQuantType == QuantType::BQuantGrouped) && !BPreshuffleQuant;
-            if constexpr(!is_bquant_non_preshuffle)
+            constexpr bool is_abquant_non_preshuffle =
+                (kQuantType == QuantType::ABQuantGrouped) && !APreshuffleQuant;
+            constexpr bool is_splitk_supported =
+                is_bquant_non_preshuffle || is_abquant_non_preshuffle;
+
+            if constexpr(!is_splitk_supported)
             {
                 if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
                 {
                     CK_TILE_ERROR("Conditions not met for Kbatch >1 ! "
-                                  "Split-K only supported for BQuantGrouped without preshuffle.");
+                                  "Split-K is supported for BQuantGrouped without preshuffle "
+                                  "and ABQuantGrouped without APreshuffleQuant.");
                 }
                 return false;
             }
             else
             {
-                using BQuantGroupSize = remove_cvref_t<typename GemmPipeline::BQuantGroupSize>;
-                constexpr auto K1     = GemmPipeline::BlockGemmShape::WarpTile::at(I2);
-                const index_t K_t     = kargs.k_batch * K1;
-                const index_t KRead   = (kargs.K + K_t - 1) / K_t * K1;
+                constexpr auto K1 = GemmPipeline::BlockGemmShape::WarpTile::at(I2);
+                const index_t KRead =
+                    get_splitk_batch_k_read(kargs.K, kargs.k_batch, K1); // per-batch K read size
+                const index_t KLast = get_splitk_last_batch_k(kargs.K, kargs.k_batch, KRead);
                 constexpr index_t BPackedSize =
                     ck_tile::numeric_traits<remove_cvref_t<BDataType>>::PackedSize;
+
+                if(KLast <= 0)
+                {
+                    if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                    {
+                        CK_TILE_ERROR("Split-K configuration produces an empty final K batch!");
+                    }
+                    return false;
+                }
 
                 // Constraint 1: KRead must align with B packing requirements.
                 // For packed data types, multiple K elements are stored in each storage unit.
@@ -1158,22 +1263,93 @@ struct QuantGemmKernel
                     return false;
                 }
 
-                // Constraint 2: KRead must align with quantization group boundaries.
-                // Each split-K batch reads KRead consecutive K elements. If KRead is not
-                // a multiple of BQuantGroupSize::kK, the batch will span partial quantization
-                // groups, requiring split access to a quantization scale. This violates the
-                // atomic processing requirement where each batch must work with complete groups.
-                if(KRead % BQuantGroupSize::kK != 0)
+                // Constraint 2: KRead must align with B quantization group boundaries.
+                if constexpr(is_bquant_non_preshuffle || is_abquant_non_preshuffle)
                 {
-                    if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                    using BQuantGroupSize = remove_cvref_t<typename GemmPipeline::BQuantGroupSize>;
+                    if(KRead % BQuantGroupSize::kK != 0)
                     {
-                        CK_TILE_ERROR("Split-K batch size must be aligned with quantization group "
-                                      "size! KRead=" +
-                                      std::to_string(KRead) +
-                                      " is not divisible by BQuantGroupSize::kK=" +
-                                      std::to_string(BQuantGroupSize::kK));
+                        if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                        {
+                            CK_TILE_ERROR(
+                                "Split-K batch size must be aligned with B quantization group "
+                                "size! KRead=" +
+                                std::to_string(KRead) +
+                                " is not divisible by BQuantGroupSize::kK=" +
+                                std::to_string(BQuantGroupSize::kK));
+                        }
+                        return false;
                     }
-                    return false;
+                }
+
+                // Constraint 3: KRead must align with A quantization group boundaries
+                // (only needed for ABQuantGrouped since AQ also indexes into K).
+                if constexpr(is_abquant_non_preshuffle)
+                {
+                    using AQuantGroupSize = remove_cvref_t<typename GemmPipeline::AQuantGroupSize>;
+                    if(KRead % AQuantGroupSize::kK != 0)
+                    {
+                        if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                        {
+                            CK_TILE_ERROR(
+                                "Split-K batch size must be aligned with A quantization group "
+                                "size! KRead=" +
+                                std::to_string(KRead) +
+                                " is not divisible by AQuantGroupSize::kK=" +
+                                std::to_string(AQuantGroupSize::kK));
+                        }
+                        return false;
+                    }
+                }
+
+                // Constraint 4: per-batch K must span at least 2 K_Tile iterations.
+                // The software-pipelined GEMM kernels (CompV3 family) prefetch one tile
+                // ahead and require num_loop >= 2 per batch.  When KRead == KPerBlock
+                // (i.e. per_batch_num_loop == 1) the prefetch would read the tile
+                // belonging to the next split-K batch, producing incorrect results.
+                {
+                    const index_t per_batch_num_loop = TilePartitioner::GetLoopNum(KRead);
+                    if(per_batch_num_loop < 2)
+                    {
+                        if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                        {
+                            CK_TILE_ERROR(
+                                "Split-K requires at least 2 K-tile iterations per batch. "
+                                "KRead=" +
+                                std::to_string(KRead) + " < 2 * KPerBlock=" +
+                                std::to_string(2 *
+                                               static_cast<index_t>(TilePartitioner::KPerBlock)) +
+                                ". Increase K or decrease k_batch.");
+                        }
+                        return false;
+                    }
+                }
+
+                // Host-side fixed tail selection is only valid when all split-K batches have
+                // the same hot-loop/tail classification. Earlier batches use KRead; the final
+                // batch may be shorter due to split rounding.
+                {
+                    const index_t first_num_loop = TilePartitioner::GetLoopNum(KRead);
+                    const index_t last_num_loop  = TilePartitioner::GetLoopNum(KLast);
+                    const bool first_hot_loop    = GemmPipeline::BlockHasHotloop(first_num_loop);
+                    const bool last_hot_loop     = GemmPipeline::BlockHasHotloop(last_num_loop);
+                    const auto first_tail = GemmPipeline::GetBlockLoopTailNum(first_num_loop);
+                    const auto last_tail  = GemmPipeline::GetBlockLoopTailNum(last_num_loop);
+
+                    if constexpr(!RuntimeSplitKTail)
+                    {
+                        if(first_hot_loop != last_hot_loop || first_tail != last_tail)
+                        {
+                            if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                            {
+                                CK_TILE_ERROR(
+                                    "Split-K batches require different hot-loop/tail handling. "
+                                    "Use a K/k_batch combination that gives matching pipeline "
+                                    "tails or enable runtime split-K tail dispatch.");
+                            }
+                            return false;
+                        }
+                    }
                 }
             }
         }
@@ -1264,6 +1440,19 @@ struct QuantGemmKernel
 
         if constexpr(std::is_same_v<CLayout, tensor_layout::gemm::RowMajor>)
         {
+            // For RowMajor C, M is the row dimension - check M alignment here because
+            // ALayout=RowMajor does not check M (it only checks K), leaving a gap for
+            // the RowMajorA + RowMajorC combination.
+            if(kargs.M % TilePartitioner::MPerBlock != 0 && GemmPipeline::kPadM == false &&
+               GemmPipeline::BlockGemmShape::NumWarps != 8)
+            {
+                if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                {
+                    CK_TILE_ERROR(
+                        "Can't support M that is not a multiple of MPerBlock without padding!");
+                }
+                return false;
+            }
             if(kargs.N % TilePartitioner::NPerBlock != 0 && GemmPipeline::kPadN == false)
             {
                 if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
@@ -1305,6 +1494,78 @@ struct QuantGemmKernel
         return true;
     }
 
+    template <typename ADramBlockWindow, typename BDramBlockWindow, typename BQDramBlockWindow>
+    CK_TILE_DEVICE static auto CallBQuantGemmPipeline(const ADramBlockWindow& a_block_window,
+                                                      const BDramBlockWindow& b_block_window,
+                                                      const BQDramBlockWindow& bq_block_window,
+                                                      const index_t num_loop,
+                                                      void* smem_ptr,
+                                                      const index_t n)
+    {
+        if constexpr(RuntimeSplitKTail)
+        {
+            static_assert(!PreshuffleB,
+                          "RuntimeSplitKTail is not implemented for preshuffle-B BQuant "
+                          "pipelines.");
+            const bool has_hot_loop   = GemmPipeline::BlockHasHotloop(num_loop);
+            const TailNumber tail_num = GemmPipeline::GetBlockLoopTailNum(num_loop);
+            return GemmPipeline{}(a_block_window,
+                                  b_block_window,
+                                  bq_block_window,
+                                  num_loop,
+                                  has_hot_loop,
+                                  tail_num,
+                                  smem_ptr,
+                                  n);
+        }
+        else
+        {
+            return GemmPipeline{}(
+                a_block_window, b_block_window, bq_block_window, num_loop, smem_ptr, n);
+        }
+    }
+
+    template <typename ADramBlockWindow,
+              typename BDramBlockWindow,
+              typename AQDramBlockWindow,
+              typename BQDramBlockWindow>
+    CK_TILE_DEVICE static auto CallABQuantGemmPipeline(const ADramBlockWindow& a_block_window,
+                                                       const BDramBlockWindow& b_block_window,
+                                                       const AQDramBlockWindow& aq_block_window,
+                                                       const BQDramBlockWindow& bq_block_window,
+                                                       const index_t num_loop,
+                                                       void* smem_ptr,
+                                                       const index_t m,
+                                                       const index_t n)
+    {
+        if constexpr(RuntimeSplitKTail)
+        {
+            const bool has_hot_loop   = GemmPipeline::BlockHasHotloop(num_loop);
+            const TailNumber tail_num = GemmPipeline::GetBlockLoopTailNum(num_loop);
+            return GemmPipeline{}(a_block_window,
+                                  b_block_window,
+                                  aq_block_window,
+                                  bq_block_window,
+                                  num_loop,
+                                  has_hot_loop,
+                                  tail_num,
+                                  smem_ptr,
+                                  m,
+                                  n);
+        }
+        else
+        {
+            return GemmPipeline{}(a_block_window,
+                                  b_block_window,
+                                  aq_block_window,
+                                  bq_block_window,
+                                  num_loop,
+                                  smem_ptr,
+                                  m,
+                                  n);
+        }
+    }
+
     /**
      * @brief Runs single GEMM problem cooperatively by whole workgroup.
      *
@@ -1336,7 +1597,10 @@ struct QuantGemmKernel
             MakeABlockWindow(a_ptr, kargs, splitk_batch_offset.splitted_k, block_idx_m);
         const auto& b_block_window =
             MakeBBlockWindow(b_ptr, kargs, splitk_batch_offset.splitted_k, block_idx_n);
-        const auto& aq_block_window = MakeAQBlockWindow(aq_ptr, kargs, block_idx_m, block_idx_n);
+        // Note: Pass aq_group_offset so the tensor view dimension reflects
+        // the remaining K-groups from the split-K offset position.
+        const auto& aq_block_window = MakeAQBlockWindow(
+            aq_ptr, kargs, block_idx_m, block_idx_n, splitk_batch_offset.aq_group_offset);
         // Note: Pass bq_group_offset so the tensor view dimension reflects
         // the remaining K-groups from the split-K offset position.
         const auto& bq_block_window = MakeBQBlockWindow(
@@ -1344,7 +1608,6 @@ struct QuantGemmKernel
 
         const index_t num_loop =
             amd_wave_read_first_lane(TilePartitioner::GetLoopNum(splitk_batch_offset.splitted_k));
-
         // Run GEMM cooperatively by whole workgroup.
         const auto& c_block_tile = [&]() {
             if constexpr(kQuantType == QuantType::AQuantGrouped)
@@ -1364,7 +1627,7 @@ struct QuantGemmKernel
                 {
                     n = kargs.N;
                 }
-                return GemmPipeline{}(
+                return CallBQuantGemmPipeline(
                     a_block_window, b_block_window, bq_block_window, num_loop, smem_ptr, n);
             }
             else if constexpr(kQuantType == QuantType::ABQuantGrouped)
@@ -1376,14 +1639,14 @@ struct QuantGemmKernel
                     // m = kargs.M;
                     n = kargs.N;
                 }
-                return GemmPipeline{}(a_block_window,
-                                      b_block_window,
-                                      aq_block_window,
-                                      bq_block_window,
-                                      num_loop,
-                                      smem_ptr,
-                                      m,
-                                      n);
+                return CallABQuantGemmPipeline(a_block_window,
+                                               b_block_window,
+                                               aq_block_window,
+                                               bq_block_window,
+                                               num_loop,
+                                               smem_ptr,
+                                               m,
+                                               n);
             }
             else if constexpr(kQuantType == QuantType::RowColQuant ||
                               kQuantType == QuantType::TensorQuant)
@@ -1466,14 +1729,16 @@ struct QuantGemmKernel
             static_cast<const ADataType*>(kargs.a_ptr) + splitk_batch_offset.a_k_split_offset;
         const BDataType* b_ptr =
             static_cast<const BDataType*>(kargs.b_ptr) + splitk_batch_offset.b_k_split_offset;
-        const AQDataType* aq_ptr = static_cast<const AQDataType*>(kargs.aq_ptr);
+        // For ABQuantGrouped split-K, aq_ptr is offset by aq_k_split_offset elements to point
+        // to the start of this batch's AQ K-groups (aq_group_offset columns in RowMajor AQ).
+        const AQDataType* aq_ptr =
+            static_cast<const AQDataType*>(kargs.aq_ptr) + splitk_batch_offset.aq_k_split_offset;
         const BQDataType* bq_ptr =
             static_cast<const BQDataType*>(kargs.bq_ptr) + splitk_batch_offset.bq_k_split_offset;
         CDataType* c_ptr = static_cast<CDataType*>(kargs.c_ptr);
 
         // allocate LDS
         __shared__ char smem_ptr[GetSmemSize()];
-
         RunGemm(
             a_ptr, b_ptr, aq_ptr, bq_ptr, c_ptr, smem_ptr, kargs, splitk_batch_offset, i_m, i_n);
     }
@@ -1494,3 +1759,6 @@ struct QuantGemmKernel
 };
 
 } // namespace ck_tile
+#if __clang_major__ >= 23
+#pragma clang diagnostic pop
+#endif
