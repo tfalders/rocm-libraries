@@ -43,9 +43,9 @@
 // Test fixture for workspace management tests
 class checkin_misc_memory_model : public ::testing::Test
 {
+protected:
     rocblas_handle handle;
 
-protected:
     void SetUp() override
     {
         ASSERT_EQ(rocblas_create_handle(&handle), rocblas_status_success);
@@ -366,41 +366,62 @@ TEST_F(checkin_misc_memory_model, NumericalCorrectness_AlternatingSizes)
 /***** 3. Nested Workspace Tests *****/
 /*************************************/
 
-TEST_F(checkin_misc_memory_model, NestedWorkspace_GESV_vs_GETRF_GETRS)
+TEST_F(checkin_misc_memory_model, NestedWorkspace_GEBLTTRS_reuses_GETRS)
 {
-    const rocblas_int n = 100;
+    // GEBLTTRS solves a block-tridiagonal system by looping GETRS (plus GEMM,
+    // which needs no extra workspace) over the nblocks diagonal blocks. Its
+    // workspace is a pure pass-through to a single nb-by-nrhs GETRS with no
+    // additional buffer, so the two queries must match exactly and GEBLTTRS
+    // must not grow with nblocks. (Contrast GESV, which adds an n*nrhs buffer
+    // to copy B and therefore cannot satisfy a clean reuse invariant.)
+    const rocblas_int nb = 100;
     const rocblas_int nrhs = 10;
-    const rocblas_int lda = n;
-    const rocblas_int ldb = n;
+    const rocblas_int lda = nb;
+    const rocblas_int ldb = nb;
+    const rocblas_int ldc = nb;
+    const rocblas_int ldx = nb;
 
-    double *dA, *dB;
-    rocblas_int *dP, *dinfo;
-    ASSERT_EQ(hipMalloc(&dA, sizeof(double) * lda * n), hipSuccess);
-    ASSERT_EQ(hipMalloc(&dB, sizeof(double) * ldb * nrhs), hipSuccess);
-    ASSERT_EQ(hipMalloc(&dP, sizeof(rocblas_int) * n), hipSuccess);
-    ASSERT_EQ(hipMalloc(&dinfo, sizeof(rocblas_int)), hipSuccess);
+    // void lambda (writes size through an out-param) so the ASSERT_EQ macros,
+    // which expand to `return;` on failure, remain valid here.
+    auto query_geblttrs = [&](rocblas_int nblocks, size_t& size) {
+        double *dA, *dB, *dC, *dX;
+        ASSERT_EQ(hipMalloc(&dA, sizeof(double) * lda * nb * nblocks), hipSuccess);
+        ASSERT_EQ(hipMalloc(&dB, sizeof(double) * ldb * nb * nblocks), hipSuccess);
+        ASSERT_EQ(hipMalloc(&dC, sizeof(double) * ldc * nb * nblocks), hipSuccess);
+        ASSERT_EQ(hipMalloc(&dX, sizeof(double) * ldx * nrhs * nblocks), hipSuccess);
 
-    // Query GESV size (calls both GETRF and GETRS internally)
-    size_t gesv_size = query_workspace_size(rocsolver_dgesv, n, nrhs, dA, lda, dP, dB, ldb, dinfo);
+        size = query_workspace_size(rocsolver_dgeblttrs_npvt, nb, nblocks, nrhs, dA, lda, dB, ldb, dC,
+                                    ldc, dX, ldx);
 
-    // Query GETRF size
-    size_t getrf_size = query_workspace_size(rocsolver_dgetrf, n, n, dA, lda, dP, dinfo);
+        hipFree(dA);
+        hipFree(dB);
+        hipFree(dC);
+        hipFree(dX);
+    };
 
-    // Query GETRS size
-    size_t getrs_size = query_workspace_size(rocsolver_dgetrs, rocblas_operation_none, n, nrhs, dA,
-                                             lda, dP, dB, ldb);
+    // Standalone GETRS over a single nb-by-nrhs block, matching the inner solve.
+    double *dGA, *dGB;
+    rocblas_int* dGP;
+    ASSERT_EQ(hipMalloc(&dGA, sizeof(double) * lda * nb), hipSuccess);
+    ASSERT_EQ(hipMalloc(&dGB, sizeof(double) * ldb * nrhs), hipSuccess);
+    ASSERT_EQ(hipMalloc(&dGP, sizeof(rocblas_int) * nb), hipSuccess);
 
-    // GESV should reuse workspace between GETRF and GETRS
-    // So gesv_size should be <= getrf_size + getrs_size (likely much less due to sharing)
-    EXPECT_LE(gesv_size, getrf_size + getrs_size);
+    size_t getrs_size = query_workspace_size(rocsolver_dgetrs, rocblas_operation_none, nb, nrhs, dGA,
+                                             lda, dGP, dGB, ldb);
 
-    // GESV must have at least as much as the maximum of the two
-    EXPECT_GE(gesv_size, std::max(getrf_size, getrs_size));
+    hipFree(dGA);
+    hipFree(dGB);
+    hipFree(dGP);
 
-    hipFree(dA);
-    hipFree(dB);
-    hipFree(dP);
-    hipFree(dinfo);
+    size_t geblttrs_size_1 = 0, geblttrs_size_8 = 0;
+    query_geblttrs(1, geblttrs_size_1);
+    query_geblttrs(8, geblttrs_size_8);
+
+    // GEBLTTRS reuses the GETRS workspace verbatim, with no extra buffer.
+    EXPECT_EQ(geblttrs_size_1, getrs_size);
+
+    // Workspace is shared across the per-block solves, so it must not grow with nblocks.
+    EXPECT_EQ(geblttrs_size_8, geblttrs_size_1);
 }
 
 TEST_F(checkin_misc_memory_model, NestedWorkspace_GESV_NumericalCorrectness)
