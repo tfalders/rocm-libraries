@@ -372,7 +372,7 @@ rocblas_status rocsolver_lahr2_template(rocblas_handle handle,
             constexpr rocblas_int TZMVN_DIM_X = 64;
             constexpr rocblas_int TZMVN_DIM_Y = ROCSOLVER_ASAN_VALUE(4, 16);
             ROCSOLVER_LAUNCH_KERNEL((rocsolver_tzmvn_kernel<TZMVN_DIM_X, TZMVN_DIM_Y, true, true, T>),
-                                    dim3((n - k - 1) / TZMVN_DIM_X + 1, 1, batch_count),
+                                    dim3(ceildiv(n - k, TZMVN_DIM_X), 1, batch_count),
                                     dim3(TZMVN_DIM_X, TZMVN_DIM_Y), 0, stream, n - k, j, neg_one, A,
                                     shiftA + idx2D(k, 0, lda), lda, strideA, work_vec, 0, 1,
                                     stride_work, one, A, shiftA + idx2D(k, j, lda), 1, strideA);
@@ -408,7 +408,7 @@ rocblas_status rocsolver_lahr2_template(rocblas_handle handle,
         constexpr rocblas_int COMPY_DIM_X = BS2;
         constexpr rocblas_int COMPY_DIM_Y = BS2;
         ROCSOLVER_LAUNCH_KERNEL((lahr2_computeY_kernel<COMPY_DIM_X, COMPY_DIM_Y, T>),
-                                dim3((n - 1) / COMPY_DIM_X + 1, 1, batch_count),
+                                dim3(ceildiv(n, COMPY_DIM_X), 1, batch_count),
                                 dim3(COMPY_DIM_X, COMPY_DIM_Y), 0, stream, n, k, j, A, shiftA, lda,
                                 strideA, Y, shiftY, ldy, strideY, F, 0, ldf, strideF, tau, strideT);
 

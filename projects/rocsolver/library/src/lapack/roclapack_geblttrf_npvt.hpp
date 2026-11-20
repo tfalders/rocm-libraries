@@ -182,7 +182,7 @@ rocblas_status rocsolver_geblttrf_npvt_template(rocblas_handle handle,
     rocblas_int* iinfo = work_helper->at<rocblas_int>("iinfo");
 
     // prepare kernels
-    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    rocblas_int blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 

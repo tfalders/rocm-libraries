@@ -181,7 +181,7 @@ __device__ void run_syevj(const rocblas_int dimx,
     S small_num = get_safemin<S>() / eps;
 
     // execute sweeps
-    rocblas_int count = (half_n - 1) / dimx + 1;
+    rocblas_int count = ceildiv(half_n, dimx);
     while(sweeps < max_sweeps && local_res > tolerance)
     {
         // for each off-diagonal element (indexed using top/bottom pairs), calculate the Jacobi rotation and apply it to Acpy
@@ -636,7 +636,7 @@ ROCSOLVER_KERNEL void syevj_diag_kernel(const rocblas_int n,
     rocblas_int x1 = xx1 + offset, x2 = x1 + 1;
     rocblas_int y1 = yy1 + offset, y2 = y1 + 1;
 
-    rocblas_int half_n = (n - 1) / 2 + 1;
+    rocblas_int half_n = ceildiv(n, 2);
     rocblas_int nb = std::min(2 * half_n - offset, nb_max);
     rocblas_int half_nb = nb / 2;
 
@@ -2286,7 +2286,7 @@ rocblas_status rocsolver_syevj_heevj_template(rocblas_handle handle,
     // quick return
     if(n <= 1)
     {
-        rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+        rocblas_int blocksReset = ceildiv(batch_count, BS1);
         dim3 gridReset(blocksReset, 1, 1);
         dim3 threadsReset(BS1, 1, 1);
 

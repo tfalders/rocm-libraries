@@ -1,5 +1,5 @@
 /************************************************************************
- * Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -911,7 +911,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDCJ_BDIM)
             // 3d.2. Organize data with non-deflated values to prepare secular equation
             /* ----------------------------------------------------------------- */
             rocblas_int tsz = 1 << (levs - 1 - k);
-            tsz = (bs - 1) / tsz + 1;
+            tsz = ceildiv(bs, tsz);
 
             // All threads of the group participating in the merge will work together
             // to solve the correspondinbg secular eqn. Now 'iam' indexes those threads
@@ -1155,7 +1155,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDCJ_BDIM)
         blks = 1 << levs;
 
         // tn is max number of vectors in each sub-block
-        tn = (bs - 1) / blks + 1;
+        tn = ceildiv(bs, blks);
 
         // 3. MERGE PHASE
         /* ----------------------------------------------------------------- */
@@ -1189,7 +1189,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDCJ_BDIM)
 
             // final number of merged sub-blocks
             rocblas_int tsz = 1 << (levs - 1 - k);
-            tsz = (bs - 1) / tsz + 1;
+            tsz = ceildiv(bs, tsz);
 
             // define shifted arrays
             S* tmpd = temps + in * n;
@@ -1419,7 +1419,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDCJ_BDIM)
         blks = 1 << levs;
 
         // tn is max number of vectors in each sub-block
-        tn = (bs - 1) / blks + 1;
+        tn = ceildiv(bs, blks);
 
         // 3. MERGE PHASE
         /* ----------------------------------------------------------------- */
@@ -1648,7 +1648,7 @@ rocblas_status rocsolver_stedcj_template(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    rocblas_int blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 
@@ -1668,7 +1668,7 @@ rocblas_status rocsolver_stedcj_template(rocblas_handle handle,
     S ssfmax = S(1.0) / ssfmin;
     ssfmin = sqrt(ssfmin) / (eps * eps);
     ssfmax = sqrt(ssfmax) / S(3.0);
-    rocblas_int blocksn = (n - 1) / BS2 + 1;
+    rocblas_int blocksn = ceildiv(n, BS2);
 
     // initialize identity matrix in C if required
     if(evect == rocblas_evect_tridiagonal)
@@ -1707,7 +1707,7 @@ rocblas_status rocsolver_stedcj_template(rocblas_handle handle,
     //----------------
     size_t lmemsize1 = sizeof(S) * 2 * STEDCJ_BDIM;
     size_t lmemsize3 = sizeof(S) * STEDCJ_BDIM;
-    rocblas_int numgrps3 = ((n - 1) / maxblks + 1) * maxblks;
+    rocblas_int numgrps3 = ceildiv(n, maxblks) * maxblks;
 
     // launch merge for level k
     /** TODO: using max number of levels for now. Kernels return immediately when passing

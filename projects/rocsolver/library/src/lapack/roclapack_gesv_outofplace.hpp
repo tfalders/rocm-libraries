@@ -147,7 +147,7 @@ rocblas_status rocsolver_gesv_outofplace_template(rocblas_handle handle,
     rocblas_get_stream(handle, &stream);
 
     // prepare kernels
-    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    rocblas_int blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 
@@ -163,8 +163,8 @@ rocblas_status rocsolver_gesv_outofplace_template(rocblas_handle handle,
     rocsolver_workspace_helper* getrs_work = work_helper->get_nested("getrs");
 
     // constants in host memory
-    const rocblas_int copyblocksx = (n - 1) / BS2 + 1;
-    const rocblas_int copyblocksy = (nrhs - 1) / BS2 + 1;
+    const rocblas_int copyblocksx = ceildiv(n, BS2);
+    const rocblas_int copyblocksy = ceildiv(nrhs, BS2);
 
     // compute LU factorization of A
     rocsolver_getrf_template<BATCHED, STRIDED, T>(handle, n, n, A, shiftA, 1, lda, strideA, ipiv, 0,

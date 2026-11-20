@@ -489,9 +489,9 @@ rocblas_status rocsolver_gesvd_template(rocblas_handle handle,
 
     // common block sizes and number of threads for internal kernels
     constexpr rocblas_int thread_count = 32;
-    const rocblas_int blocks_m = (m - 1) / thread_count + 1;
-    const rocblas_int blocks_n = (n - 1) / thread_count + 1;
-    const rocblas_int blocks_k = (k - 1) / thread_count + 1;
+    const rocblas_int blocks_m = ceildiv(m, thread_count);
+    const rocblas_int blocks_n = ceildiv(n, thread_count);
+    const rocblas_int blocks_k = ceildiv(k, thread_count);
 
     /** A thin SVD could be computed for matrices with sufficiently more rows than
         columns (or columns than rows) by starting with a QR factorization (or LQ

@@ -612,7 +612,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM)
 
     constexpr I regs = 8;
     const I chunk_width = regs * hipBlockDim_x;
-    const I n_chunks = (sz - 1) / chunk_width + 1;
+    const I n_chunks = ceildiv(sz, chunk_width);
     S bval[regs];
     I maskval[regs];
 
@@ -935,7 +935,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM)
 
     constexpr I regs = 16;
     const I chunk_width = regs * hipBlockDim_x;
-    const I n_chunks = (n - 1) / chunk_width + 1;
+    const I n_chunks = ceildiv(n, chunk_width);
     S bval[regs];
     S tval[regs];
 
@@ -1047,7 +1047,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM)
 
     constexpr I regs = 8;
     const I chunk_width = regs * hipBlockDim_x;
-    const I n_chunks = (sz - 1) / chunk_width + 1;
+    const I n_chunks = ceildiv(sz, chunk_width);
     S bval[regs];
     I maskval[regs];
 
@@ -1540,7 +1540,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM) stedc_copyD(const I n,
 
     constexpr I regs = 16;
     const I chunk_width = regs * hipBlockDim_x;
-    const I n_chunks = (n - 1) / chunk_width + 1;
+    const I n_chunks = ceildiv(n, chunk_width);
     S bval[regs];
 
     for(I chunk = 0; chunk < n_chunks; chunk++)
@@ -1584,7 +1584,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM) stedc_copyC(const I n,
 
     constexpr I regs = 16;
     const I chunk_width = regs * hipBlockDim_x;
-    const I n_chunks = (n - 1) / chunk_width + 1;
+    const I n_chunks = ceildiv(n, chunk_width);
     T bval[regs];
 
     for(I chunk = 0; chunk < n_chunks; chunk++)
@@ -1635,7 +1635,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM) stedc_reshuffleC(const I n,
 
     constexpr I regs = 16;
     const I chunk_width = regs * hipBlockDim_x;
-    const I n_chunks = (n - 1) / chunk_width + 1;
+    const I n_chunks = ceildiv(n, chunk_width);
     T bval[regs];
 
     for(I chunk = 0; chunk < n_chunks; chunk++)
@@ -1687,7 +1687,7 @@ ROCSOLVER_KERNEL void __launch_bounds__(STEDC_BDIM) stedc_sort(const I n,
 
     constexpr I regs = 16;
     const I chunk_width = regs * hipBlockDim_x;
-    const I n_chunks = (n - 1) / chunk_width + 1;
+    const I n_chunks = ceildiv(n, chunk_width);
     T bvalT[regs];
     S* bvalS = reinterpret_cast<S*>(bvalT);
 
@@ -1938,7 +1938,7 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocksReset = (batch_count - 1) / BS1 + 1;
+    I blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 
@@ -2005,13 +2005,13 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
             hipMemsetAsync((void*)splits, 0, sizeof(I) * get_splits_size(n) * batch_count, stream));
         HIP_CHECK(hipMemsetAsync((void*)tmpz, 0, sizeof(S) * get_tmpz_size(n) * batch_count, stream));
 
-        I groupsn = (n - 1) / BS2 + 1;
+        I groupsn = ceildiv(n, BS2);
         ROCSOLVER_LAUNCH_KERNEL(init_ident<S>, dim3(groupsn, groupsn, batch_count), dim3(BS2, BS2),
                                 0, stream, n, n, V, 0, ldv, strideV);
 
         // 1. divide phase
         //-----------------------------
-        I groups = (batch_count - 1) / STEDC_BDIM + 1;
+        I groups = ceildiv(batch_count, STEDC_BDIM);
         ROCSOLVER_LAUNCH_KERNEL((stedc_divide_kernel<S>), dim3(groups), dim3(STEDC_BDIM), (I)0,
                                 stream, levs, blks, n, D + shiftD, strideD, E + shiftE, strideE,
                                 batch_count, splits);
@@ -2040,7 +2040,7 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
             ROCSOLVER_LAUNCH_KERNEL((stedc_mergePrepare_SortD_kernel<S>), dim3(n, batch_count),
                                     dim3(STEDC_BDIM), (I)0, stream, k, n, D + shiftD, strideD, tmpz,
                                     splits);
-            I numgrps_deflate = (n - 1) / STEDC_BDIM + 1;
+            I numgrps_deflate = ceildiv(n, STEDC_BDIM);
             ROCSOLVER_LAUNCH_KERNEL((stedc_mergePrepare_SetCandFlags_kernel<S>),
                                     dim3(numgrps_deflate, batch_count), dim3(STEDC_BDIM), (I)0,
                                     stream, k, n, D + shiftD, strideD, tmpz, splits);
@@ -2070,7 +2070,7 @@ rocblas_status rocsolver_stedc_template(rocblas_handle handle,
                                     (I)0, stream, n, ptr_vecs(n, tempgemm), (I)0, n,
                                     get_tempgemm_size(n), V, (I)0, ldv, strideV, splits);
 
-            I numgrps_solve = (n - 1) / STEDC_SOLVE_BDIM + 1;
+            I numgrps_solve = ceildiv(n, STEDC_SOLVE_BDIM);
             ROCSOLVER_LAUNCH_KERNEL((stedc_mergeValues_Solve_kernel<S>),
                                     dim3(numgrps_solve, batch_count), dim3(STEDC_SOLVE_BDIM), (I)0,
                                     stream, k, n, D + shiftD, strideD, E + shiftE, strideE, tmpz,

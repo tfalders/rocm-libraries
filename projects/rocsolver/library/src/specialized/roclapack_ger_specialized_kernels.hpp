@@ -118,8 +118,8 @@ rocblas_status rocsolver_ger(rocblas_handle handle,
     rocblas_get_pointer_mode(handle, &pmode);
 
     // launch specialized kernel
-    I blocksx = (m - 1) / BS2 + 1;
-    I blocksy = (n - 1) / BS2 + 1;
+    I blocksx = ceildiv(m, BS2);
+    I blocksy = ceildiv(n, BS2);
     dim3 grid(blocksx, blocksy, batch_count);
     dim3 threads(BS2, BS2, 1);
     if(pmode == rocblas_pointer_mode_device)

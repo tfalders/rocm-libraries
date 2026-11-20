@@ -291,7 +291,7 @@ rocblas_status rocsolver_geqr2_template(rocblas_handle handle,
 
     // restore diagonal values of A
     constexpr int DIAG_NTHREADS = 64;
-    I blocks = (dim - 1) / DIAG_NTHREADS + 1;
+    I blocks = ceildiv(dim, DIAG_NTHREADS);
     ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, I>), dim3(batch_count, blocks, 1),
                             dim3(1, DIAG_NTHREADS, 1), 0, stream, (S*)diag, 0, dim, A, shiftA, lda,
                             strideA, dim);

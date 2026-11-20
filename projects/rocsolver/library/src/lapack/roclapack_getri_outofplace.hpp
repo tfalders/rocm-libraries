@@ -128,7 +128,7 @@ rocblas_status rocsolver_getri_outofplace_template(rocblas_handle handle,
     // quick return if no dimensions
     if(n == 0)
     {
-        rocblas_int blocks = (batch_count - 1) / 32 + 1;
+        rocblas_int blocks = ceildiv(batch_count, 32);
         ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocks, 1, 1), dim3(32, 1, 1), 0, stream, info,
                                 batch_count, 0);
         return rocblas_status_success;
@@ -139,7 +139,7 @@ rocblas_status rocsolver_getri_outofplace_template(rocblas_handle handle,
                             stream, n, A, shiftA, lda, strideA, info);
 
     // initialize C to the identity
-    rocblas_int blocks = (n - 1) / BS2 + 1;
+    rocblas_int blocks = ceildiv(n, BS2);
     ROCSOLVER_LAUNCH_KERNEL(init_ident<T>, dim3(blocks, blocks, batch_count), dim3(BS2, BS2), 0,
                             stream, n, n, C, shiftC, ldc, strideC);
 

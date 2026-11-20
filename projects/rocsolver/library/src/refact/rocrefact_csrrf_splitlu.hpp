@@ -1,5 +1,5 @@
 /* **************************************************************************
- * Copyright (C) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2023-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -531,7 +531,7 @@ rocblas_status rocsolver_csrrf_splitlu_template(rocblas_handle handle,
     if(nnzT == 0)
     {
         // set ptrU = 0
-        const rocblas_int blocks = (n - 1) / BS1 + 1;
+        const rocblas_int blocks = ceildiv(n, BS1);
         dim3 grid(blocks, 1, 1);
         dim3 threads(BS1, 1, 1);
         ROCSOLVER_LAUNCH_KERNEL(reset_info, grid, threads, 0, stream, ptrU, n + 1, 0);
@@ -563,7 +563,7 @@ rocblas_status rocsolver_csrrf_splitlu_template(rocblas_handle handle,
     }
     else
     {
-        rocblas_int const nblocks = std::max(1, std::min(1024, (n - 1) / BS1 + 1));
+        rocblas_int const nblocks = std::max(1, std::min(1024, ceildiv(n, BS1)));
 
         rocblas_int* const Lp = ptrL;
         rocblas_int* const Up = ptrU;
@@ -583,7 +583,7 @@ rocblas_status rocsolver_csrrf_splitlu_template(rocblas_handle handle,
             // ---------------------------------------------------
             // double check result from rf_splitLU_gen_nzLU_kernel
             // ---------------------------------------------------
-            ROCSOLVER_LAUNCH_KERNEL(check_nzLU_kernel<T>, dim3((n - 1) / BS1 + 1, 1, 1),
+            ROCSOLVER_LAUNCH_KERNEL(check_nzLU_kernel<T>, dim3(ceildiv(n, BS1), 1, 1),
                                     dim3(BS1, 1, 1), 0, stream, n, nnzT, ptrT, indT, Lp + 1, Up + 1);
         }
 #endif

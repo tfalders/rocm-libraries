@@ -574,7 +574,7 @@ rocblas_status rocsolver_getf2_template(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     dim3 grid(blocks, 1, 1);
     dim3 threads(256, 1, 1);
     I dim = std::min(m, n); // total number of pivots
@@ -590,7 +590,7 @@ rocblas_status rocsolver_getf2_template(rocblas_handle handle,
     // initialize permutation array if needed
     if(permut_idx)
     {
-        blocks = (m - 1) / 256 + 1;
+        blocks = ceildiv(m, 256);
         threads = dim3(256, 1, 1);
         grid = dim3(blocks, batch_count, 1);
         ROCSOLVER_LAUNCH_KERNEL(getf2_permut_init<T>, grid, threads, 0, stream, m, permut_idx,
@@ -629,7 +629,7 @@ rocblas_status rocsolver_getf2_template(rocblas_handle handle,
     I singular_thds = getf2_get_checksingularity_blksize(n);
     dim3 gridMax(1, batch_count, 1);
     dim3 threadsMax(IAMAX_THDS, 1, 1);
-    blocks = pivot ? (n - 1) / singular_thds + 1 : 1;
+    blocks = pivot ? ceildiv(n, singular_thds) : 1;
     dim3 threadsPivot((pivot ? singular_thds : 1), 1, 1);
     dim3 gridPivot(blocks, batch_count, 1);
     I c, mm, nn;

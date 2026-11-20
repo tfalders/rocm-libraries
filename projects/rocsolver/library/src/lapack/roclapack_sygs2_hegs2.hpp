@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2021-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2021-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -235,8 +235,8 @@ rocblas_status rocsolver_sygs2_hegs2_template(rocblas_handle handle,
     // everything must be executed with scalars on the device
     rocblas_pointer_mode_saver saver(handle, rocblas_pointer_mode_device);
 
-    rocblas_int blocks_batch = (batch_count - 1) / BS1 + 1;
-    rocblas_int waves_batch = (batch_count - 1) / get_device_warp_size() + 1;
+    rocblas_int blocks_batch = ceildiv(batch_count, BS1);
+    rocblas_int waves_batch = ceildiv(batch_count, get_device_warp_size());
     dim3 blocks(blocks_batch, 1, 1);
     dim3 threads(std::min(BS1, get_device_warp_size() * waves_batch), 1, 1);
 

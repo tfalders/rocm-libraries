@@ -61,7 +61,7 @@ __device__ __host__ inline int64_t
 template <typename I1, typename I2>
 __device__ __host__ inline I1 ceil(const I1 n, const I2 nb)
 {
-    return ((n - 1) / nb) + 1;
+    return ceildiv(n, nb);
 }
 
 template <typename T>

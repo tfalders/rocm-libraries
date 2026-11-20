@@ -140,7 +140,7 @@ rocblas_status rocsolver_orgql_ungql_template(rocblas_handle handle,
     // corresponding bottom submatrix
     if(kk < m)
     {
-        blocksx = (kk - 1) / BS2 + 1;
+        blocksx = ceildiv(kk, BS2);
         blocksy = (n - kk - 1) / BS2 + 1;
         ROCSOLVER_LAUNCH_KERNEL(set_zero<T>, dim3(blocksx, blocksy, batch_count), dim3(BS2, BS2), 0,
                                 stream, kk, n - kk, A, shiftA + idx2D(m - kk, 0, lda), lda, strideA);
@@ -173,7 +173,7 @@ rocblas_status rocsolver_orgql_ungql_template(rocblas_handle handle,
         if(j > 0)
         {
             blocksx = (k - j - jb - 1) / BS2 + 1;
-            blocksy = (jb - 1) / BS2 + 1;
+            blocksy = ceildiv(jb, BS2);
             ROCSOLVER_LAUNCH_KERNEL(set_zero<T>, dim3(blocksx, blocksy, batch_count),
                                     dim3(BS2, BS2), 0, stream, k - j - jb, jb, A,
                                     shiftA + idx2D(m - k + j + jb, n - k + j, lda), lda, strideA);

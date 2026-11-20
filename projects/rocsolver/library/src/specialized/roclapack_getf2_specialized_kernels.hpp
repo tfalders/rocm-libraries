@@ -575,7 +575,7 @@ rocblas_status getf2_run_small(rocblas_handle handle,
     // determine sizes
     I opval[] = {GETF2_OPTIM_NGRP};
     I ngrp = (batch_count < 2 || m > 32) ? 1 : opval[m - 1];
-    I blocks = (batch_count - 1) / ngrp + 1;
+    I blocks = ceildiv(batch_count, ngrp);
     I nthds = m;
     I msize;
     if(pivot)
@@ -752,7 +752,7 @@ void getf2_run_scale_update(rocblas_handle handle,
                             const I dimy)
 {
     size_t lmemsize = sizeof(T) * (dimx + n);
-    I blocks = (m - 1) / dimx + 1;
+    I blocks = ceildiv(m, dimx);
     dim3 threads(dimx, dimy, 1);
     dim3 grid(blocks, 1, batch_count);
     hipStream_t stream;

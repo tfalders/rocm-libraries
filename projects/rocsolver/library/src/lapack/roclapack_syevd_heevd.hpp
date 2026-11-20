@@ -471,7 +471,7 @@ rocblas_status rocsolver_syevd_heevd_template(rocblas_handle handle,
     rocsolver_alg_mode hetrd_mode;
     ROCBLAS_CHECK(rocsolver_get_alg_mode(handle, rocsolver_function_hetrd, &hetrd_mode));
 
-    I blocksReset = (batch_count - 1) / BS1 + 1;
+    I blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 
@@ -681,7 +681,7 @@ rocblas_status rocsolver_syevd_heevd_template(rocblas_handle handle,
                 (T*)work1, (T*)work3, workArr);
 
             // copy matrix product into A
-            const I copyblocks = (n - 1) / BS2 + 1;
+            const I copyblocks = ceildiv(n, BS2);
             ROCSOLVER_LAUNCH_KERNEL(copy_mat<T>, dim3(copyblocks, copyblocks, batch_count),
                                     dim3(BS2, BS2), 0, stream, n, n, tmptau_W, 0, ldw, strideW, A,
                                     shiftA, lda, strideA);
@@ -775,7 +775,7 @@ rocblas_status rocsolver_syevd_heevd_template(rocblas_handle handle,
     rocsolver_alg_mode hetrd_mode;
     ROCBLAS_CHECK(rocsolver_get_alg_mode(handle, rocsolver_function_hetrd, &hetrd_mode));
 
-    I blocksReset = (batch_count - 1) / BS1 + 1;
+    I blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 
@@ -985,7 +985,7 @@ rocblas_status rocsolver_syevd_heevd_template(rocblas_handle handle,
                 splits, work4, (T*)work1, (T*)work3, workArr, optim_mem);
 
             // copy matrix product into A
-            const I copyblocks = (n - 1) / BS2 + 1;
+            const I copyblocks = ceildiv(n, BS2);
             ROCSOLVER_LAUNCH_KERNEL(copy_mat<T>, dim3(copyblocks, copyblocks, batch_count),
                                     dim3(BS2, BS2), 0, stream, n, n, tmptau_W, 0, ldw, strideW, A,
                                     shiftA, lda, strideA);

@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     June 2017
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc.
+ * Copyright (C) 2019-2026 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 
 #pragma once
@@ -122,7 +122,7 @@ rocblas_status rocsolver_laswp_template(rocblas_handle handle,
     if(n == 0 || batch_count == 0)
         return rocblas_status_success;
 
-    I blocksPivot = (n - 1) / LASWP_THDS + 1;
+    I blocksPivot = ceildiv(n, LASWP_THDS);
     dim3 gridPivot(blocksPivot, batch_count, 1);
     dim3 threads(LASWP_THDS, 1, 1);
 

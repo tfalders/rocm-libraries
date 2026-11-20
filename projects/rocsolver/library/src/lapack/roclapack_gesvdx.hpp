@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     April 2012
- * Copyright (C) 2020-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2020-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -347,7 +347,7 @@ rocblas_status rocsolver_gesvdx_template(rocblas_handle handle,
     rocblas_get_stream(handle, &stream);
 
     // set info = 0 and nsv = 0
-    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    rocblas_int blocksReset = ceildiv(batch_count, BS1);
     ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocksReset, 1, 1), dim3(BS1, 1, 1), 0, stream, info,
                             batch_count, 0);
     ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocksReset, 1, 1), dim3(BS1, 1, 1), 0, stream, nsv,
@@ -386,10 +386,10 @@ rocblas_status rocsolver_gesvdx_template(rocblas_handle handle,
     bool trans;
 
     // common block sizes and number of threads for internal kernels
-    const rocblas_int blocks_m = (m - 1) / thread_count + 1;
-    const rocblas_int blocks_n = (n - 1) / thread_count + 1;
-    const rocblas_int blocks_k = (k - 1) / thread_count + 1;
-    const rocblas_int blocks_nsv = (nsv_max - 1) / thread_count + 1;
+    const rocblas_int blocks_m = ceildiv(m, thread_count);
+    const rocblas_int blocks_n = ceildiv(n, thread_count);
+    const rocblas_int blocks_k = ceildiv(k, thread_count);
+    const rocblas_int blocks_nsv = ceildiv(nsv_max, thread_count);
 
     /***** 1. bidiagonalization *****/
     /********************************/

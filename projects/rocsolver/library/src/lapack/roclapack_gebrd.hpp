@@ -168,7 +168,7 @@ rocblas_status rocsolver_gebrd_template(rocblas_handle handle,
                        lda, strideA, &one, A, shiftA + idx2D(j + jb, j + jb, lda), lda, strideA,
                        batch_count, (T**)work_workArr);
 
-        blocks = (jb - 1) / 64 + 1;
+        blocks = ceildiv(jb, 64);
         if(m >= n)
         {
             ROCSOLVER_LAUNCH_KERNEL((restore_diag<T, rocblas_int>), dim3(batch_count, blocks, 1),

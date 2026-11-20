@@ -385,7 +385,7 @@ rocblas_status rocsolver_sterf_template(rocblas_handle handle,
     rocsolver_alg_mode alg_mode;
     ROCBLAS_CHECK(rocsolver_get_alg_mode(handle, rocsolver_function_sterf, &alg_mode));
 
-    I blocksReset = (batch_count - 1) / BS1 + 1;
+    I blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 

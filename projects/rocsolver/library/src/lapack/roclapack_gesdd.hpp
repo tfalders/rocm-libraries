@@ -374,7 +374,7 @@ rocblas_status rocsolver_gesdd_template(rocblas_handle handle,
     // Quick return
     if(m == 0 || n == 0)
     {
-        rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+        rocblas_int blocksReset = ceildiv(batch_count, BS1);
         dim3 gridReset(blocksReset, 1, 1);
         dim3 threadsReset(BS1, 1, 1);
 
@@ -457,7 +457,7 @@ rocblas_status rocsolver_gesdd_template(rocblas_handle handle,
                                                     (T*)work5_ipiv, n, batch_count, scalars, work2,
                                                     (T*)work3, (T*)work4, (T**)workArr);
 
-        rocblas_int blocks = (n - 1) / BS1 + 1;
+        rocblas_int blocks = ceildiv(n, BS1);
         blocks = std::min(blocks, props->maxGridSize[0]);
         auto bc = std::min(batch_count, props->maxGridSize[1]);
         ROCSOLVER_LAUNCH_KERNEL(gesdd_flip_signs<T>, dim3(blocks, bc, 1), dim3(BS1, 1, 1), 0,
@@ -472,7 +472,7 @@ rocblas_status rocsolver_gesdd_template(rocblas_handle handle,
         // Transpose V (for consistency with LAPACK's API)
         if(rightv)
         {
-            rocblas_int blocks_n = (n - 1) / BS2 + 1;
+            rocblas_int blocks_n = ceildiv(n, BS2);
             ROCSOLVER_LAUNCH_KERNEL((copy_trans_mat<T, T>), dim3(blocks_n, blocks_n, batch_count),
                                     dim3(BS2, BS2, 1), 0, stream,
                                     rocblas_operation_conjugate_transpose, n, n, V_gemm, 0,
@@ -523,7 +523,7 @@ rocblas_status rocsolver_gesdd_template(rocblas_handle handle,
                                                     (T*)work5_ipiv, m, batch_count, scalars, work2,
                                                     (T*)work3, (T*)work4, (T**)workArr);
 
-        rocblas_int blocks = (m - 1) / BS1 + 1;
+        rocblas_int blocks = ceildiv(m, BS1);
         blocks = std::min(blocks, props->maxGridSize[0]);
         auto bc = std::min(batch_count, props->maxGridSize[1]);
         ROCSOLVER_LAUNCH_KERNEL(gesdd_flip_signs<T>, dim3(blocks, bc, 1), dim3(BS1, 1, 1), 0,

@@ -132,7 +132,7 @@ try
         hipStream_t stream;
         rocblas_get_stream(handle, &stream);
 
-        rocblas_int blocks = (strideP - 1) / 32 + 1;
+        rocblas_int blocks = ceildiv(strideP, 32);
         ROCSOLVER_LAUNCH_KERNEL(copy_array_to_ptrs, dim3(blocks, batch_count), dim3(32, 1), 0,
                                 stream, strideP, tau, (T*)ipiv);
     }

@@ -5,7 +5,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     June 2017
- * Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -54,7 +54,7 @@ static void swap_template(rocblas_handle handle,
                           hipStream_t stream)
 {
     auto nthreads = get_device_warp_size() * 2;
-    auto nblocks = (n - 1) / nthreads + 1;
+    auto nblocks = ceildiv(n, nthreads);
 
     ROCSOLVER_LAUNCH_KERNEL((swap_kernel<T, I>), dim3(nblocks, 1, 1), dim3(nthreads, 1, 1), 0,
                             stream, n, x, incx, y, incy);
@@ -72,7 +72,7 @@ static void rot_template(rocblas_handle handle,
                          hipStream_t stream)
 {
     auto nthreads = get_device_warp_size() * 2;
-    auto nblocks = (n - 1) / nthreads + 1;
+    auto nblocks = ceildiv(n, nthreads);
 
     ROCSOLVER_LAUNCH_KERNEL((rot_kernel<S, T, I>), dim3(nblocks, 1, 1), dim3(nthreads, 1, 1), 0,
                             stream, n, x, incx, y, incy, c, s);
@@ -87,7 +87,7 @@ static void scal_template(rocblas_handle handle,
                           hipStream_t stream)
 {
     auto nthreads = get_device_warp_size() * 2;
-    auto nblocks = (n - 1) / nthreads + 1;
+    auto nblocks = ceildiv(n, nthreads);
 
     ROCSOLVER_LAUNCH_KERNEL((scal_kernel<S, T, I>), dim3(nblocks, 1, 1), dim3(nthreads, 1, 1), 0,
                             stream, n, da, x, incx);

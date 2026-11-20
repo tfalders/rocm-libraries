@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     June 2013
- * Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -467,7 +467,7 @@ rocblas_status rocsolver_lasr_template(rocblas_handle handle,
 
     auto const nthreads = LASR_MAX_NTHREADS;
     auto const mn = (is_side_left) ? n : m;
-    auto const nblocks = (mn - 1) / nthreads + 1;
+    auto const nblocks = ceildiv(mn, nthreads);
 
     ROCSOLVER_LAUNCH_KERNEL((lasr_kernel<T>), dim3(nblocks, 1, batch_count), dim3(nthreads, 1, 1),
                             0, stream, side, pivot, direct, m, n, CA, strideC, SA, strideS, AA,

@@ -89,7 +89,7 @@ rocblas_status run_steqr_hybrid(rocblas_handle handle,
     ROCBLAS_CHECK(hC.init_pointers_only(dC, shiftC, strideC, batch_count, stream));
     HIP_CHECK(hipStreamSynchronize(stream));
 
-    I blocks = (n - 1) / BS1 + 1;
+    I blocks = ceildiv(n, BS1);
 
     for(I b = 0; b < batch_count; b++)
     {
@@ -798,7 +798,7 @@ rocblas_status rocsolver_steqr_template(rocblas_handle handle,
     rocsolver_alg_mode alg_mode;
     ROCBLAS_CHECK(rocsolver_get_alg_mode(handle, rocsolver_function_steqr, &alg_mode));
 
-    I blocksReset = (batch_count - 1) / BS1 + 1;
+    I blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 
@@ -815,7 +815,7 @@ rocblas_status rocsolver_steqr_template(rocblas_handle handle,
     // Initialize identity matrix
     if(evect == rocblas_evect_tridiagonal)
     {
-        I blocks = (n - 1) / BS2 + 1;
+        I blocks = ceildiv(n, BS2);
         ROCSOLVER_LAUNCH_KERNEL(init_ident<T>, dim3(blocks, blocks, batch_count), dim3(BS2, BS2), 0,
                                 stream, n, n, C, shiftC, ldc, strideC);
     }

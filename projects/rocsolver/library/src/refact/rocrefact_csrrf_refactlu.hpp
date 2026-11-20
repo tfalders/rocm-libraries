@@ -183,7 +183,7 @@ rocblas_status rocsolver_csrrf_refactlu_template(rocblas_handle handle,
     ROCBLAS_CHECK(rocblas_get_stream(handle, &stream));
     ROCSPARSE_CHECK(rocsparse_set_stream(rfinfo->sphandle, stream));
 
-    rocblas_int nblocks = (n - 1) / BS2 + 1;
+    rocblas_int nblocks = ceildiv(n, BS2);
     ROCSOLVER_LAUNCH_KERNEL(rf_ipvec_kernel<T>, dim3(nblocks), dim3(BS2), 0, stream, n, pivQ,
                             (rocblas_int*)work);
 

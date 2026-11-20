@@ -3197,7 +3197,7 @@ void local_gemm(rocblas_handle handle,
     // A = temp
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
-    rocblas_int blocks = (n - 1) / BS2 + 1;
+    rocblas_int blocks = ceildiv(n, BS2);
     ROCSOLVER_LAUNCH_KERNEL(copy_mat<T>, dim3(blocks, blocks, batch_count), dim3(BS2, BS2), 0,
                             stream, copymat_from_buffer, n, n, A, shiftA, lda, strideA, temp);
 }
@@ -3231,7 +3231,7 @@ void local_gemm(rocblas_handle handle,
     // work = real(A)
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
-    rocblas_int blocks = (n - 1) / BS2 + 1;
+    rocblas_int blocks = ceildiv(n, BS2);
     ROCSOLVER_LAUNCH_KERNEL((copy_mat<T, S, true>), dim3(blocks, blocks, batch_count), dim3(BS2, BS2),
                             0, stream, copymat_to_buffer, n, n, A, shiftA, lda, strideA, work);
 
@@ -3691,7 +3691,7 @@ rocblas_status rocsolver_lacn2_template(rocblas_handle handle,
     if(*h_kase == 0)
     {
         // initialize x = (1/n, ..., 1/n)
-        rocblas_int blocks = (n - 1) / LACN2_BLOCKSIZE + 1;
+        rocblas_int blocks = ceildiv(n, LACN2_BLOCKSIZE);
 
         // Get device properties and cap grid size to maxGridSize[0]
         int device;

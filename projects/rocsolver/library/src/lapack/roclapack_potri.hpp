@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -133,7 +133,7 @@ rocblas_status rocsolver_potri_template(rocblas_handle handle,
     // quick return if no dimensions
     if(n == 0)
     {
-        rocblas_int blocks = (batch_count - 1) / 32 + 1;
+        rocblas_int blocks = ceildiv(batch_count, 32);
         ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocks, 1, 1), dim3(32, 1, 1), 0, stream, info,
                                 batch_count, 0);
         return rocblas_status_success;
@@ -148,7 +148,7 @@ rocblas_status rocsolver_potri_template(rocblas_handle handle,
     rocblas_pointer_mode_saver saver(handle, rocblas_pointer_mode_host);
 
     // constants in host memory
-    const rocblas_int copyblocks = (n - 1) / BS2 + 1;
+    const rocblas_int copyblocks = ceildiv(n, BS2);
     T one = 1;
 
     // tmpcopy is workspace and may hold data from a previous call. The copy

@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -112,7 +112,7 @@ rocblas_status rocsolver_lacgv_template(rocblas_handle handle,
 
     // conjugate x
     constexpr int LACGV_NTHREADS = 64;
-    I blocks = (n - 1) / LACGV_NTHREADS + 1;
+    I blocks = ceildiv(n, LACGV_NTHREADS);
     ROCSOLVER_LAUNCH_KERNEL(conj_in_place<T>, dim3(1, blocks, batch_count), dim3(1, 64, 1), 0,
                             stream, (I)1, n, x, offset, incx, stridex);
 

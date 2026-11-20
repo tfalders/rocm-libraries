@@ -289,8 +289,8 @@ ROCSOLVER_EXPORT rocblas_status rocsolver_gemm(rocblas_handle handle,
         const bool conjB = transB == rocblas_operation_conjugate_transpose;
 
         // launch specialized kernel
-        I blocksx = (m - 1) / BS2 + 1;
-        I blocksy = (n - 1) / BS2 + 1;
+        I blocksx = ceildiv(m, BS2);
+        I blocksy = ceildiv(n, BS2);
         dim3 grid(blocksx, blocksy, batch_count);
         dim3 threads(BS2, BS2, 1);
         if(pmode == rocblas_pointer_mode_device)

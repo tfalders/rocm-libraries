@@ -253,7 +253,7 @@ void trti2(rocblas_handle handle,
     rocblas_pointer_mode_saver saver(handle, rocblas_pointer_mode_device);
 
     // inverse of the diagonal (reciprocals)
-    rocblas_int blocks = (n - 1) / 32 + 1;
+    rocblas_int blocks = ceildiv(n, 32);
     ROCSOLVER_LAUNCH_KERNEL(invdiag<T>, dim3(blocks, batch_count), dim3(32, 1), 0, stream, diag, n,
                             A, shiftA, lda, strideA, alphas);
 
@@ -314,7 +314,7 @@ rocblas_status rocsolver_trtri_template(rocblas_handle handle,
     static constexpr bool ISBATCHED = BATCHED || STRIDED;
 
     // start with info = 0
-    rocblas_int blocks = (batch_count - 1) / 32 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 32);
     ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocks, 1, 1), dim3(32, 1, 1), 0, stream, info,
                             batch_count, 0);
 
@@ -327,7 +327,7 @@ rocblas_status rocsolver_trtri_template(rocblas_handle handle,
     T one = 1;
     T minone = -1;
 
-    blocks = (n - 1) / BS2 + 1;
+    blocks = ceildiv(n, BS2);
     rocblas_int ldw = n;
     rocblas_stride strideW = n * n;
 

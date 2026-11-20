@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     June 2017
- * Copyright (C) 2020-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2020-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -1307,7 +1307,7 @@ rocblas_status rocsolver_bdsqr_template(rocblas_handle handle,
                     break;
 
                 dim3 gridSplits(1, h_params.num_splits, batch_count);
-                dim3 gridVUC((nvuc_max - 1) / BS1 + 1, h_params.num_splits, batch_count);
+                dim3 gridVUC(ceildiv(nvuc_max, BS1), h_params.num_splits, batch_count);
 
                 for(rocblas_int inner_iters = 0; inner_iters < BDSQR_ITERS_PER_SYNC; inner_iters++)
                 {

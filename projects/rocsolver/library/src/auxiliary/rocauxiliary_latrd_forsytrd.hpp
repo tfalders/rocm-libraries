@@ -189,10 +189,10 @@ ROCSOLVER_KERNEL void latrd_upper_updateA_kernel(const rocblas_int mm,
 
     // rpgr and rpgc are the number of rounds a group should run
     // to cover all the rows and columns, respectively
-    int ngrp = (m - 1) / threadsr + 1;
-    int rpgr = (ngrp - 1) / groupsr + 1;
+    int ngrp = ceildiv(m, threadsr);
+    int rpgr = ceildiv(ngrp, groupsr);
     ngrp = (n - 1) / threadsc + 1;
-    int rpgc = (ngrp - 1) / groupsc + 1;
+    int rpgc = ceildiv(ngrp, groupsc);
     int i, j;
 
     // Registers/LDS:
@@ -298,10 +298,10 @@ ROCSOLVER_KERNEL void latrd_lower_updateA_kernel(const rocblas_int mm,
 
     // rpgr and rpgc are the number of rounds a group should run
     // to cover all the rows and columns, respectively
-    int ngrp = (m - 1) / threadsr + 1;
-    int rpgr = (ngrp - 1) / groupsr + 1;
+    int ngrp = ceildiv(m, threadsr);
+    int rpgr = ceildiv(ngrp, groupsr);
     ngrp = (n - 1) / threadsc + 1;
-    int rpgc = (ngrp - 1) / groupsc + 1;
+    int rpgc = ceildiv(ngrp, groupsc);
     int i, j;
 
     // Registers/LDS:
@@ -581,9 +581,9 @@ ROCSOLVER_KERNEL void latrd_upper_updateW_kernel(const rocblas_int mm,
     // rpgr and rpgc are the number of rounds a group should run
     // to cover all the rows and columns, respectively
     int ngrp = (m - 1) / threadsr + 1;
-    int rpgr = (ngrp - 1) / groupsr + 1;
+    int rpgr = ceildiv(ngrp, groupsr);
     ngrp = (n - 1) / threadsc + 1;
-    int rpgc = (ngrp - 1) / groupsc + 1;
+    int rpgc = ceildiv(ngrp, groupsc);
     int i, j;
 
     // Registers/LDS:
@@ -696,9 +696,9 @@ ROCSOLVER_KERNEL void latrd_lower_updateW_kernel(const rocblas_int mm,
     // rpgr and rpgc are the number of rounds a group should run
     // to cover all the rows and columns, respectively
     int ngrp = (m - 1) / threadsr + 1;
-    int rpgr = (ngrp - 1) / groupsr + 1;
+    int rpgr = ceildiv(ngrp, groupsr);
     ngrp = (n - 1) / threadsc + 1;
-    int rpgc = (ngrp - 1) / groupsc + 1;
+    int rpgc = ceildiv(ngrp, groupsc);
     int i, j;
 
     // Registers/LDS:
@@ -835,7 +835,7 @@ void rocsolver_latrd_forsytrd_getMemorySize(const rocblas_int n,
     // the configuration of the computeW kernels in advance. For now, taking
     // worst case.
     w4 = sizeof(T) * k * batch_count;
-    rocblas_int gr = (n - 1) / 4 + 1;
+    rocblas_int gr = ceildiv(n, 4);
     n3 = sizeof(T) * (n + k) * gr * batch_count;
 
     *size_norms = std::max({n1, n2, n3});
@@ -880,7 +880,7 @@ rocblas_status rocsolver_latrd_forsytrd_template(rocblas_handle handle,
     rocblas_int thr_updates, thc_updates;
     latrd_get_config_for_updates<T>(n, k, &dr, &thr_updates, &dc, &thc_updates);
     size_t lmemsize_updates = sizeof(T) * (thr_updates * thc_updates);
-    rocblas_int grr_updates = (n * dr / 4 - 1) / thr_updates + 1;
+    rocblas_int grr_updates = ceildiv(n * dr / 4, thr_updates);
     rocblas_int grc_updates = (k * dc / 4 - 1) / thc_updates + 1;
 
     rocblas_stride strideblk = k;

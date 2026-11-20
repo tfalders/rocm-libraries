@@ -1,5 +1,5 @@
 /************************************************************************
- * Copyright (C) 2022-2024 Advanced Micro Devices, Inc.
+ * Copyright (C) 2022-2026 Advanced Micro Devices, Inc.
  * ***********************************************************************/
 
 #pragma once
@@ -75,7 +75,7 @@ rocblas_status rocsolver_lauum_template(rocblas_handle handle,
     rocblas_pointer_mode_saver saver(handle, rocblas_pointer_mode_host);
 
     rocblas_int strideW = n * n;
-    rocblas_int blocks = (n - 1) / BS2 + 1;
+    rocblas_int blocks = ceildiv(n, BS2);
     dim3 grid(blocks, blocks, batch_count);
     dim3 threads(BS2, BS2);
     T one = 1;

@@ -592,7 +592,7 @@ rocblas_status rocsolver_larft_template(rocblas_handle handle,
     // Fix diagonal of T, set the unused triangular part to zero,
     // setup tau (changing signs) and account for the non-stored 1's on the
     // householder vectors
-    I blocks = (k - 1) / BS2 + 1;
+    I blocks = ceildiv(k, BS2);
     ROCSOLVER_LAUNCH_KERNEL((set_triangular<T, I, U>),
                             dim3(static_cast<uint32_t>(blocks), static_cast<uint32_t>(blocks),
                                  static_cast<uint32_t>(batch_count)),
@@ -905,7 +905,7 @@ rocblas_status rocsolver_larft_inverse_template(rocblas_handle handle,
         tri_offset = (!forward && n > k) ? idx2D(0, n - k, ldv) : 0;
     }
 
-    I blocks = (k - 1) / BS2 + 1;
+    I blocks = ceildiv(k, BS2);
     dim3 gridTri(blocks, blocks, batch_count);
     dim3 blockTri(BS2, BS2);
 

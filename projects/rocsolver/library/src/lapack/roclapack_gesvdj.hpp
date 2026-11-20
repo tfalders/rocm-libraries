@@ -284,7 +284,7 @@ rocblas_status rocsolver_gesvdj_template(rocblas_handle handle,
     // quick return
     if(m == 0 || n == 0)
     {
-        rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+        rocblas_int blocksReset = ceildiv(batch_count, BS1);
         dim3 gridReset(blocksReset, 1, 1);
         dim3 threadsReset(BS1, 1, 1);
 
@@ -340,7 +340,7 @@ rocblas_status rocsolver_gesvdj_template(rocblas_handle handle,
                                                     (T*)work5_ipiv, n, batch_count, scalars, work2,
                                                     (T*)work3, (T*)work4, (T**)work6_workArr);
 
-        rocblas_int blocks = (n - 1) / BS1 + 1;
+        rocblas_int blocks = ceildiv(n, BS1);
         ROCSOLVER_LAUNCH_KERNEL(gesvdj_finalize<T>, dim3(blocks, batch_count, 1), dim3(BS1, 1, 1),
                                 0, stream, n, S, strideS, U_gemm, ldu_gemm, strideU_gemm, V_gemm,
                                 ldv_gemm, strideV_gemm);
@@ -353,7 +353,7 @@ rocblas_status rocsolver_gesvdj_template(rocblas_handle handle,
         // transpose V
         if(rightv)
         {
-            rocblas_int blocks_n = (n - 1) / BS2 + 1;
+            rocblas_int blocks_n = ceildiv(n, BS2);
             ROCSOLVER_LAUNCH_KERNEL((copy_trans_mat<T, T>), dim3(blocks_n, blocks_n, batch_count),
                                     dim3(BS2, BS2, 1), 0, stream,
                                     rocblas_operation_conjugate_transpose, n, n, V_gemm, 0,
@@ -392,7 +392,7 @@ rocblas_status rocsolver_gesvdj_template(rocblas_handle handle,
                                                     (T*)work5_ipiv, m, batch_count, scalars, work2,
                                                     (T*)work3, (T*)work4, (T**)work6_workArr);
 
-        rocblas_int blocks = (m - 1) / BS1 + 1;
+        rocblas_int blocks = ceildiv(m, BS1);
         ROCSOLVER_LAUNCH_KERNEL(gesvdj_finalize<T>, dim3(blocks, batch_count, 1), dim3(BS1, 1, 1),
                                 0, stream, m, S, strideS, V_gemm, ldv_gemm, strideV_gemm, U_gemm,
                                 ldu_gemm, strideU_gemm);

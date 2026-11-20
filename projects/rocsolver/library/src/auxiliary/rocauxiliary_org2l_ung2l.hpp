@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     December 2016
- * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -149,8 +149,8 @@ rocblas_status rocsolver_org2l_ung2l_template(rocblas_handle handle,
     rocblas_pointer_mode_saver saver(handle, rocblas_pointer_mode_device);
 
     // Initialize identity matrix (non used rows)
-    rocblas_int blocksx = (m - 1) / BS2 + 1;
-    rocblas_int blocksy = (n - 1) / BS2 + 1;
+    rocblas_int blocksx = ceildiv(m, BS2);
+    rocblas_int blocksy = ceildiv(n, BS2);
     ROCSOLVER_LAUNCH_KERNEL(org2l_init_ident<T>, dim3(blocksx, blocksy, batch_count),
                             dim3(BS2, BS2), 0, stream, m, n, k, A, shiftA, lda, strideA);
 

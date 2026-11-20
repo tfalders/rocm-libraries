@@ -244,7 +244,7 @@ rocblas_status rocsolver_syevdx_heevdx_inplace_template(rocblas_handle handle,
     // quick return with info = 0 and nev = 0
     if(n == 0)
     {
-        rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+        rocblas_int blocksReset = ceildiv(batch_count, BS1);
         dim3 gridReset(blocksReset, 1, 1);
         dim3 threads(BS1, 1, 1);
         ROCSOLVER_LAUNCH_KERNEL(reset_info, gridReset, threads, 0, stream, info, batch_count, 0);
@@ -257,7 +257,7 @@ rocblas_status rocsolver_syevdx_heevdx_inplace_template(rocblas_handle handle,
 
     const rocblas_stride stride = n;
 
-    rocblas_int blocksn = (n - 1) / BS2 + 1;
+    rocblas_int blocksn = ceildiv(n, BS2);
     dim3 gridA(blocksn, blocksn, batch_count);
     dim3 threadsA(BS2, BS2, 1);
 

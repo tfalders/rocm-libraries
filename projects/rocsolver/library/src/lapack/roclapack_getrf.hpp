@@ -649,7 +649,7 @@ rocblas_status rocsolver_getrf_template(rocblas_handle handle,
     // quick return if no dimensions
     if(m == 0 || n == 0)
     {
-        blocks = (batch_count - 1) / BS1 + 1;
+        blocks = ceildiv(batch_count, BS1);
         grid = dim3(blocks, 1, 1);
         threads = dim3(BS1, 1, 1);
         ROCSOLVER_LAUNCH_KERNEL(reset_info, grid, threads, 0, stream, info, batch_count, 0);

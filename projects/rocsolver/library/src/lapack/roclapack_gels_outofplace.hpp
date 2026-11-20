@@ -171,7 +171,7 @@ rocblas_status rocsolver_gels_outofplace_template(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocksReset = (batch_count - 1) / BS1 + 1;
+    rocblas_int blocksReset = ceildiv(batch_count, BS1);
     dim3 gridReset(blocksReset, 1, 1);
     dim3 threads(BS1, 1, 1);
 
@@ -187,7 +187,7 @@ rocblas_status rocsolver_gels_outofplace_template(rocblas_handle handle,
     {
         rocblas_int rowsX = (trans == rocblas_operation_none ? n : m);
         rocblas_int blocksx = (rowsX - 1) / BS2 + 1;
-        rocblas_int blocksy = (nrhs - 1) / BS2 + 1;
+        rocblas_int blocksy = ceildiv(nrhs, BS2);
         ROCSOLVER_LAUNCH_KERNEL(set_zero<T>, dim3(blocksx, blocksy, batch_count), dim3(BS2, BS2), 0,
                                 stream, rowsX, nrhs, X, shiftX, ldx, strideX);
 
@@ -199,10 +199,10 @@ rocblas_status rocsolver_gels_outofplace_template(rocblas_handle handle,
 
     // constants in host memory
     const rocblas_stride strideP = std::min(m, n);
-    const rocblas_int check_threads = std::min(((std::min(m, n) - 1) / 64 + 1) * 64, BS1);
-    const rocblas_int copyblocksmin = (std::min(m, n) - 1) / BS2 + 1;
-    const rocblas_int copyblocksmax = (std::max(m, n) - 1) / BS2 + 1;
-    const rocblas_int copyblocksy = (nrhs - 1) / BS2 + 1;
+    const rocblas_int check_threads = std::min(ceildiv(std::min(m, n), 64) * 64, BS1);
+    const rocblas_int copyblocksmin = ceildiv(std::min(m, n), BS2);
+    const rocblas_int copyblocksmax = ceildiv(std::max(m, n), BS2);
+    const rocblas_int copyblocksy = ceildiv(nrhs, BS2);
 
     // TODO: apply scaling to improve accuracy over a larger range of values
 
@@ -303,7 +303,7 @@ rocblas_status rocsolver_gels_outofplace_template(rocblas_handle handle,
                 work_x_temp, workArr_temp_arr, diag_trfac_invA, trfact_workTrmm_invA_arr);
 
             // zero row m to n-1 of X in cases where info is zero
-            const rocblas_int zeroblocksx = (n - m - 1) / BS2 + 1;
+            const rocblas_int zeroblocksx = ceildiv(n - m, BS2);
             ROCSOLVER_LAUNCH_KERNEL((gels_set_zero<T, U>),
                                     dim3(zeroblocksx, copyblocksy, batch_count), dim3(BS2, BS2), 0,
                                     stream, m, n, nrhs, X, shiftX, ldx, strideX, info);

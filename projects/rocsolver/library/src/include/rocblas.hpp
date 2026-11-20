@@ -579,7 +579,7 @@ rocblas_status rocblasCall_dot(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, x, stridex,
                             batch_count);
 
@@ -747,7 +747,7 @@ rocblas_status rocblasCall_ger(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, y, stridey,
                             batch_count);
 
@@ -814,7 +814,7 @@ rocblas_status rocblasCall_ger(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, x, stridex,
                             batch_count);
 
@@ -957,7 +957,7 @@ rocblas_status rocblasCall_gemv(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, A, strideA,
                             batch_count);
 
@@ -1000,7 +1000,7 @@ rocblas_status rocblasCall_gemv(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, x, stridex,
                             batch_count);
 
@@ -1043,7 +1043,7 @@ rocblas_status rocblasCall_gemv(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, y, stridey,
                             batch_count);
 
@@ -1086,7 +1086,7 @@ rocblas_status rocblasCall_gemv(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, x, stridex,
                             batch_count);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, (work + batch_count), y,
@@ -1132,7 +1132,7 @@ rocblas_status rocblasCall_gemv(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, A, strideA,
                             batch_count);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, (work + batch_count), y,
@@ -1323,7 +1323,7 @@ rocblas_status rocblasCall_gemm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, A, stride_a,
                             batch_count);
 
@@ -1375,7 +1375,7 @@ rocblas_status rocblasCall_gemm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, B, stride_b,
                             batch_count);
 
@@ -1429,7 +1429,7 @@ rocblas_status rocblasCall_gemm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, C, stride_c,
                             batch_count);
 
@@ -1481,7 +1481,7 @@ rocblas_status rocblasCall_gemm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, B, stride_b,
                             batch_count);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work + batch_count, C,
@@ -1537,7 +1537,7 @@ rocblas_status rocblasCall_gemm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, A, stride_a,
                             batch_count);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work + batch_count, C,
@@ -1593,7 +1593,7 @@ rocblas_status rocblasCall_gemm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, A, stride_a,
                             batch_count);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work + batch_count, B,
@@ -1710,7 +1710,7 @@ rocblas_status rocblasCall_trmm(rocblas_handle handle,
 
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
 
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, workArr, B, strideB,
                             batch_count);
@@ -1828,7 +1828,7 @@ rocblas_status rocblasCall_trmm(rocblas_handle handle,
 
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
-    rocblas_int blocks = (batch_count - 1) / BS1 + 1;
+    rocblas_int blocks = ceildiv(batch_count, BS1);
 
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(BS1), 0, stream, workArr, C, strideC,
                             batch_count);
@@ -1950,7 +1950,7 @@ rocblas_status rocblasCall_syr2_her2(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, y, stridey,
                             batch_count);
 
@@ -2077,7 +2077,7 @@ rocblas_status rocblasCall_syrk_herk(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, C, strideC,
                             batch_count);
 
@@ -2126,7 +2126,7 @@ rocblas_status rocblasCall_syrk_herk(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, A, strideA,
                             batch_count);
 
@@ -2228,7 +2228,7 @@ rocblas_status rocblasCall_syr2k_her2k(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, B, strideB,
                             batch_count);
 
@@ -2336,7 +2336,7 @@ rocblas_status rocblasCall_syr2k_her2k(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, work, B, strideB,
                             batch_count);
 
@@ -2487,7 +2487,7 @@ rocblas_status rocblasCall_symv_hemv(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, workArr, y, stridey,
                             batch_count);
 
@@ -2839,7 +2839,7 @@ rocblas_status rocblasCall_trsm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, workArr, A, stride_A,
                             batch_count);
 
@@ -2895,7 +2895,7 @@ rocblas_status rocblasCall_trsm(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    I blocks = (batch_count - 1) / 256 + 1;
+    I blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, workArr, B, stride_B,
                             batch_count);
 
@@ -3010,7 +3010,7 @@ rocblas_status rocblasCall_trtri(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, c_temp_arr, c_temp,
                             c_temp_els, batch_count);
 
@@ -3047,7 +3047,7 @@ rocblas_status rocblasCall_trtri(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, workArr, invA,
                             stride_invA, batch_count);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, c_temp_arr, c_temp,

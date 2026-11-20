@@ -234,7 +234,7 @@ void rocsolver_ormlq_unmlq_template(rocblas_handle handle,
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
 
-    rocblas_int blocks = (batch_count - 1) / 256 + 1;
+    rocblas_int blocks = ceildiv(batch_count, 256);
     ROCSOLVER_LAUNCH_KERNEL(get_array, dim3(blocks), dim3(256), 0, stream, workArr2, C, strideC,
                             batch_count);
 

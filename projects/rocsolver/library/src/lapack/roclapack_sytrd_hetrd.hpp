@@ -177,7 +177,7 @@ rocblas_status rocsolver_sytrd_hetrd_template(rocblas_handle handle,
     // also copy the non referenced part of A to recover it if necessary
     T* work;
     T* Acpy;
-    rocblas_int blocks = (n - 1) / BS2 + 1;
+    rocblas_int blocks = ceildiv(n, BS2);
     rocblas_fill uplo2 = (uplo == rocblas_fill_upper) ? rocblas_fill_lower : rocblas_fill_upper;
 
     if(recover_A)
@@ -265,7 +265,7 @@ rocblas_status rocsolver_sytrd_hetrd_template(rocblas_handle handle,
     }
 
     // Copy results (set tridiagonal form in A)
-    blocks = (n - 1) / BS1 + 1;
+    blocks = ceildiv(n, BS1);
     ROCSOLVER_LAUNCH_KERNEL(set_tridiag<T>, dim3(blocks, batch_count), dim3(BS1), 0, stream, uplo,
                             n, A, shiftA, lda, strideA, D, strideD, E, strideE);
 

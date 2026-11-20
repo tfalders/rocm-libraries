@@ -176,7 +176,7 @@ rocblas_status rocsolver_sy2sb_he2hb_template(rocblas_handle handle,
     // Symmetrize A if only one triangle is provided.
     if(uplo != rocblas_fill_full)
     {
-        I blocks = (n - 1) / BS2 + 1;
+        I blocks = ceildiv(n, BS2);
         ROCSOLVER_LAUNCH_KERNEL((copy_trans_mat<T, T>), dim3(blocks, blocks, batch_count),
                                 dim3(BS2, BS2, 1), 0, stream, rocblas_operation_conjugate_transpose,
                                 n, n, // opts
