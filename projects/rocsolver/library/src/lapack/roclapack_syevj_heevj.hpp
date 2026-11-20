@@ -882,7 +882,7 @@ ROCSOLVER_KERNEL void syevj_diag_rotate(const bool skip_block,
     auto const bid_start = hipBlockIdx_z;
     auto const bid_inc = hipGridDim_z;
 
-    auto const blocks = ceil(n, nb_max);
+    auto const blocks = ceildiv(n, nb_max);
 
     // -------------------------------------------------
     // function to calculation the size of the i-th block
@@ -1276,7 +1276,7 @@ ROCSOLVER_KERNEL void syevj_offd_kernel(const rocblas_int nb_max,
                                         rocblas_int* completed,
                                         rocblas_int batch_count)
 {
-    auto const blocks = ceil(n, nb_max);
+    auto const blocks = ceildiv(n, nb_max);
     auto const even_blocks = blocks + (blocks % 2);
     auto const half_blocks = even_blocks / 2;
 
@@ -1688,7 +1688,7 @@ ROCSOLVER_KERNEL void syevj_offd_rotate(const bool skip_block,
 {
     bool constexpr APPLY_RIGHT = (!APPLY_LEFT);
 
-    auto const blocks = ceil(n, nb_max);
+    auto const blocks = ceildiv(n, nb_max);
     auto const even_blocks = blocks + (blocks % 2);
     auto const half_blocks = even_blocks / 2;
 
@@ -2181,9 +2181,9 @@ void rocsolver_syevj_heevj_getMemorySize(const rocblas_evect evect,
     }
 
     rocblas_int const nb_max = BS2;
-    auto const half_n = ceil(n, 2);
-    auto const blocks = ceil(n, nb_max);
-    auto const half_blocks = ceil(blocks, 2);
+    auto const half_n = ceildiv(n, 2);
+    auto const blocks = ceildiv(n, nb_max);
+    auto const half_blocks = ceildiv(blocks, 2);
 
     // size of temporary workspace to store the block rotation matrices
     if(half_blocks == 1 && evect == rocblas_evect_none)
@@ -2341,7 +2341,7 @@ rocblas_status rocsolver_syevj_heevj_template(rocblas_handle handle,
 
         // kernel dimensions
         rocblas_int const blocksReset = batch_count / BS1 + 1;
-        auto const blocks = ceil(n, nb_max);
+        auto const blocks = ceildiv(n, nb_max);
         auto const even_blocks = blocks + (blocks % 2);
         auto const half_blocks = even_blocks / 2;
 

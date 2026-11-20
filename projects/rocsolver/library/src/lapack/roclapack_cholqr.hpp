@@ -396,7 +396,7 @@ static rocblas_status cal_sigma(rocblas_handle handle,
 
     I const max_blocks = props->multiProcessorCount;
     I const nbx = 1; // note nbx == 1 is necessary for correctness
-    I const nby = std::min(max_blocks, ceil(n, ny));
+    I const nby = std::min(max_blocks, ceildiv(n, ny));
     I const nbz = std::min(max_blocks, batch_count);
 
     ROCSOLVER_LAUNCH_KERNEL((cal_gnorm_sq_kernel<T>), dim3(nbx, nby, nbz), dim3(nx, ny, nz),
@@ -407,7 +407,7 @@ static rocblas_status cal_sigma(rocblas_handle handle,
     S const dscale = 11.0 * n * eps * (m + (n + 1));
 
     I const nx_scale = 64;
-    I const nbx_scale = ceil(batch_count, nx_scale);
+    I const nbx_scale = ceildiv(batch_count, nx_scale);
     ROCSOLVER_LAUNCH_KERNEL((scale_kernel<S>), dim3(nbx_scale, 1, 1), dim3(nx_scale, 1, 1), 0,
                             stream, batch_count, dscale, sigma);
 
@@ -482,7 +482,7 @@ static void add_shift(rocblas_handle handle,
     I const max_blocks = props->multiProcessorCount;
     I const min_mn = std::min(m, n);
 
-    I const nbx = std::min(max_blocks, ceil(min_mn, nx));
+    I const nbx = std::min(max_blocks, ceildiv(min_mn, nx));
     I const nby = 1;
     I const nbz = std::min(max_blocks, batch_count);
 
@@ -718,8 +718,8 @@ static rocblas_status rocsolver_cholqr1_template(rocblas_handle handle,
     // clean cholesky factor W if factorization of all columns (rows) failed
     I max_blocks = 1024;
     I thdx = 16, thdy = 16;
-    I blkx = std::min(max_blocks, ceil(mn, thdx));
-    I blky = std::min(max_blocks, ceil(mn, thdy));
+    I blkx = std::min(max_blocks, ceildiv(mn, thdx));
+    I blky = std::min(max_blocks, ceildiv(mn, thdy));
     I blkz = std::min(max_blocks, batch_count);
     ROCSOLVER_LAUNCH_KERNEL(cholqr_cleannr_w_kernel, dim3(blkx, blky, blkz), dim3(thdx, thdy, 1), 0,
                             stream, m, n, mn, nr, iinfo, W, shiftW, ldw, strideW, batch_count,
@@ -736,7 +736,7 @@ static rocblas_status rocsolver_cholqr1_template(rocblas_handle handle,
     {
         // update values in nr (will happen in first refinement iteration when
         // cholshift is not none)
-        blkx = ceil(batch_count, BS1);
+        blkx = ceildiv(batch_count, BS1);
         ROCSOLVER_LAUNCH_KERNEL(cholqr_updatenr_kernel, dim3(blkx), dim3(BS1), 0, stream, mn, nr,
                                 iinfo, batch_count);
     }
@@ -782,7 +782,7 @@ static rocblas_status rocsolver_cholqr_template(rocblas_handle handle,
     rocblas_get_stream(handle, &stream);
 
     // set nr=0
-    I blocks = ceil(batch_count, BS1);
+    I blocks = ceildiv(batch_count, BS1);
     ROCSOLVER_LAUNCH_KERNEL(reset_info, dim3(blocks), dim3(BS1), 0, stream, nr, batch_count, 0);
 
     // quick return if no dimensions
@@ -805,8 +805,8 @@ static rocblas_status rocsolver_cholqr_template(rocblas_handle handle,
     I blocksm, blocksn;
     if(add_sigma)
     {
-        blocksm = ceil(m, BS2);
-        blocksn = ceil(n, BS2);
+        blocksm = ceildiv(m, BS2);
+        blocksn = ceildiv(n, BS2);
         ROCSOLVER_LAUNCH_KERNEL((copy_mat<T>), dim3(blocksm, blocksn, batch_count), dim3(BS2, BS2, 1),
                                 0, stream, copymat_to_buffer, m, n, A, shiftA, lda, strideA, Acpy);
     }
