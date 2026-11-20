@@ -129,8 +129,6 @@ ROCSOLVER_KERNEL void __launch_bounds__(SYTRS_MAX_THDS) sytrs_kernel(bool const 
     // ------------------
     auto idx2D = [](auto i, auto j, auto ld) { return (i + (j * static_cast<int64_t>(ld))); };
 
-    auto ceildiv = [](auto const n, auto const b) { return ((n <= 0) ? 0 : ((n - 1) / b + 1)); };
-
     I nrhs = nrhs_arg;
     Istride offsetB = 0;
 
@@ -1137,7 +1135,6 @@ rocblas_status rocsolver_sytrs_template(rocblas_handle handle,
     // -----------------------------------------
     // each thread block handles about NB columns of B
     // -----------------------------------------
-    auto ceildiv = [](auto const n, auto const b) { return ((n <= 0) ? 0 : ((n - 1) / b + 1)); };
     I const NB = SYTRS_MAX_THDS;
     I const nbx = ceildiv(nrhs, NB);
 

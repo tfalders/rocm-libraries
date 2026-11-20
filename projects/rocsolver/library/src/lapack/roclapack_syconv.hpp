@@ -319,8 +319,6 @@ static __global__ __launch_bounds__(SYCONV_MAX_THDS) void syconv_kernel(bool con
                                       + threadIdx.z * (blockDim.x * blockDim.y));
     I const ij_inc = static_cast<I>((blockDim.x * blockDim.y) * blockDim.z);
 
-    auto ceildiv = [](auto m, auto b) { return ((m <= 0) ? 0 : (m - 1) / b + 1); };
-
     // ------------------------------------------------
     // note: this thread block handles only columns in
     // [gcol_start,gcol_end] inclusively and
@@ -695,8 +693,6 @@ static rocblas_status rocsolver_syconv_template(rocblas_handle handle,
                                                   ipiv, E, batch_count, work, size_work);
     if(st != rocblas_status_continue)
         return st;
-
-    auto ceildiv = [](auto n, auto b) { return ((n <= 0) ? 0 : (n - 1) / b + 1); };
 
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);

@@ -4,7 +4,7 @@
  *     Univ. of Tennessee, Univ. of California Berkeley,
  *     Univ. of Colorado Denver and NAG Ltd..
  *     June 2013
- * Copyright (C) 2019-2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -311,10 +311,8 @@ rocblas_status rocsolver_larfb_template(rocblas_handle handle,
 
     // copy A1 to tmptr
 
-    auto ceil = [](auto n, auto base) { return ((n - 1) / base + 1); };
-
-    auto const blocksx = ceil(ldw, BS2);
-    auto const blocksy = ceil(order, BS2);
+    auto const blocksx = ceildiv(ldw, BS2);
+    auto const blocksy = ceildiv(order, BS2);
     ROCSOLVER_LAUNCH_KERNEL(copymatA1, dim3(blocksx, blocksy, batch_count), dim3(BS2, BS2), 0,
                             stream, ldw, order, A, offsetA1, lda, strideA, tmptr);
 
@@ -583,10 +581,9 @@ rocblas_status rocsolver_larfb_inverse_template(rocblas_handle handle,
     uploT = (forward ? rocblas_fill_upper : rocblas_fill_lower);
 
     // copy A1 to tmptr
-    auto ceil = [](auto n, auto base) { return ((n - 1) / base + 1); };
 
-    auto const blocksx = ceil(ldw, BS2);
-    auto const blocksy = ceil(order, BS2);
+    auto const blocksx = ceildiv(ldw, BS2);
+    auto const blocksy = ceildiv(order, BS2);
     ROCSOLVER_LAUNCH_KERNEL(copymatA1, dim3(blocksx, blocksy, batch_count), dim3(BS2, BS2), 0,
                             stream, ldw, order, A, offsetA1, lda, strideA, tmptr);
 

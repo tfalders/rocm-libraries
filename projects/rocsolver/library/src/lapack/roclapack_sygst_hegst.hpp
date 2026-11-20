@@ -47,8 +47,6 @@ static bool constexpr use_sygst_hegst_recursion = true;
 template <typename T, typename I>
 static inline I sygst_hegst_get_len_Asave(I const n)
 {
-    auto ceildiv = [](auto m, auto b) { return ((m - 1) / b + 1); };
-
     I constexpr byte_alignment = 128;
     I const nb = xxGST_BLOCKSIZE;
     I const nT = ceildiv(byte_alignment, sizeof(T));
@@ -170,8 +168,6 @@ static void copy_symm_tri(rocblas_handle handle,
                           I const batch_count,
                           bool const is_restore)
 {
-    auto ceildiv = [](auto m, auto b) { return ((m + b - 1) / b); };
-
     I const nx = 64;
     I const ny = 4;
     I const max_blocks = sygst_hegst_get_max_blocks();
